@@ -1,0 +1,72 @@
+# 📚 기본 개념 (Basic Concepts)
+
+Move 언어의 핵심 개념들을 단계별로 학습합니다. Movement Network에서 스마트 계약을 개발하기 위한 필수 지식들을 다룹니다.
+
+## 🎯 학습 목표
+
+이 섹션을 완료하면 다음을 할 수 있게 됩니다:
+- Move 언어의 기본 문법과 타입 시스템 이해
+- 모듈과 리소스를 활용한 안전한 스마트 계약 작성
+- 제네릭과 에러 처리를 통한 견고한 코드 개발
+- 단위 테스트를 통한 코드 품질 관리
+
+## 📖 학습 순서
+
+### 1. [데이터 타입](/basic-concepts/data-types)
+Move의 기본 타입들을 알아봅니다:
+- Integer (u8, u64, u128, u256)
+- Boolean, Address, Signer
+- String & Vector
+
+### 2. [모듈과 리소스](/basic-concepts/modules-resources)
+Move의 핵심 개념인 모듈과 리소스를 학습합니다:
+- Module 구조와 패키지 시스템
+- Resource의 Abilities (key, store, copy, drop)
+- move_to, move_from을 통한 리소스 관리
+
+### 3. [제어 구조](/basic-concepts/control-structures)
+조건문과 반복문을 다룹니다:
+- if/else, else if 조건문
+- while, for, loop 반복문
+- break와 continue
+
+### 4. [상수와 에러 처리](/basic-concepts/constants-errors)
+안정적인 코드를 위한 상수와 에러 처리:
+- const 상수 선언과 네이밍 규칙
+- abort와 assert! 에러 처리
+- 에러 코드 모듈화
+
+### 5. [제네릭과 팬텀 타입](/basic-concepts/generics-phantom)
+재사용 가능한 코드를 위한 고급 타입 시스템:
+- Generic 함수와 구조체
+- 타입 제약 (constraints)
+- Phantom 타입 활용
+
+### 6. [단위 테스트](/basic-concepts/unit-testing)
+코드 품질을 보장하는 테스팅:
+- #[test] 어노테이션 활용
+- #[expected_failure] 실패 테스트
+- CLI를 통한 테스트 실행
+
+## 💡 실습 준비
+
+각 개념을 학습할 때는 다음 환경이 준비되어 있어야 합니다:
+
+1. **Movement CLI 설치** - [개발자 도구](/developer-tools) 참조
+2. **프로젝트 초기화**:
+   ```bash
+   movement move init basic-concepts-practice
+   cd basic-concepts-practice
+   ```
+3. **코드 에디터** - VS Code + Move Extension 권장
+
+## 🔗 관련 섹션
+
+- **이전 단계**: [개발 환경 설정](/getting-started)
+- **다음 단계**: [고급 개념](/advanced-concepts)
+- **실전 응용**: [dApp 개발](/dapp-development)
+- **참고**: [Movement 개발자 포털](https://developer.movementnetwork.xyz/), [Movement 공식 문서](https://docs.movementnetwork.xyz/)
+
+---
+
+*Move 언어의 안전성과 표현력을 경험해보세요! 🚀*

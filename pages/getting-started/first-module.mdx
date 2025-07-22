@@ -1,0 +1,448 @@
+# 📝 첫 Move 모듈 만들기
+
+Movement Network에서 첫 번째 Move 모듈을 생성하고 테스트하는 과정을 단계별로 알아보겠습니다.
+
+## 🎯 학습 목표
+
+이 튜토리얼을 완료하면:
+- Move 프로젝트 구조를 이해할 수 있습니다
+- 기본적인 Move 모듈을 작성할 수 있습니다  
+- 코드를 컴파일하고 테스트할 수 있습니다
+- Move 언어의 핵심 개념을 경험할 수 있습니다
+
+## 🚀 1. 새 프로젝트 생성
+
+먼저 새로운 Move 프로젝트를 생성해봅시다.
+
+### 프로젝트 초기화
+```bash
+# 새 프로젝트 생성
+movement move init hello-movement
+
+# 프로젝트 디렉토리로 이동
+cd hello-movement
+
+# 프로젝트 구조 확인
+tree
+```
+
+### 생성된 프로젝트 구조
+```
+hello-movement/
+├── Move.toml          # 프로젝트 설정 파일
+├── sources/           # Move 소스 코드
+│   └── hello.move     # 기본 모듈 파일
+└── tests/             # 테스트 파일
+```
+
+## 📋 2. Move.toml 설정 파일
+
+프로젝트의 메타데이터와 의존성을 관리하는 파일입니다.
+
+### 기본 Move.toml
+```toml
+[package]
+name = "hello-movement"
+version = "0.1.0"
+
+[addresses]
+hello_movement = "_"
+
+[dependencies]
+MoveStdlib = { 
+    git = "https://github.com/movementlabsxyz/aptos-core.git", 
+    subdir = "aptos-move/framework/move-stdlib", 
+    rev = "mainnet" 
+}
+MovementFramework = { 
+    git = "https://github.com/movementlabsxyz/aptos-core.git", 
+    subdir = "aptos-move/framework/aptos-framework", 
+    rev = "mainnet" 
+}
+```
+
+### 설정 요소 설명
+- **[package]**: 프로젝트 기본 정보
+- **[addresses]**: 모듈 주소 별칭 정의
+- **[dependencies]**: 외부 라이브러리 의존성
+
+## 📄 3. 첫 번째 Move 모듈 작성
+
+`sources/hello.move` 파일을 생성하고 기본 모듈을 작성해봅시다.
+
+### Hello World 모듈
+```move
+module hello_movement::hello {
+    use std::string::{Self, String};
+    use std::signer;
+    
+    // 인사말을 저장하는 리소스
+    struct Greeting has key, store, drop {
+        message: String,
+        count: u64,
+    }
+    
+    // 모듈 초기화 - 계정에 인사말 리소스 생성
+    public fun init_greeting(account: &signer) {
+        let greeting = Greeting {
+            message: string::utf8(b"Hello, Movement Network!"),
+            count: 0,
+        };
+        move_to(account, greeting);
+    }
+    
+    // 인사말 반환하는 공개 함수
+    public fun get_greeting(addr: address): String acquires Greeting {
+        let greeting = borrow_global<Greeting>(addr);
+        greeting.message
+    }
+    
+    // 카운터 증가
+    public fun increment_count(account: &signer) acquires Greeting {
+        let addr = signer::address_of(account);
+        let greeting = borrow_global_mut<Greeting>(addr);
+        greeting.count = greeting.count + 1;
+    }
+    
+    // 현재 카운트 조회
+    public fun get_count(addr: address): u64 acquires Greeting {
+        let greeting = borrow_global<Greeting>(addr);
+        greeting.count
+    }
+    
+    // 인사말 메시지 업데이트
+    public fun update_greeting(account: &signer, new_message: String) acquires Greeting {
+        let addr = signer::address_of(account);
+        let greeting = borrow_global_mut<Greeting>(addr);
+        greeting.message = new_message;
+    }
+}
+```
+
+### 코드 설명
+
+#### 모듈 선언
+```move
+module hello_movement::hello {
+    // 모듈 내용
+}
+```
+- `hello_movement`: 주소 별칭 (Move.toml에서 정의)
+- `hello`: 모듈 이름
+
+#### 리소스 정의
+```move
+struct Greeting has key, store, drop {
+    message: String,
+    count: u64,
+}
+```
+- `key`: 전역 저장소에 저장 가능
+- `store`: 다른 구조체 안에 저장 가능  
+- `drop`: 스코프를 벗어나면 자동 삭제
+
+#### 공개 함수
+```move
+public fun init_greeting(account: &signer) {
+    // 계정에 리소스 저장
+}
+```
+
+## 🔧 4. 프로젝트 빌드
+
+작성한 코드를 컴파일해봅시다.
+
+### 빌드 명령어
+```bash
+# 프로젝트 빌드
+movement move build
+
+# 성공 시 출력 예시
+# Compiling, may take a little while to download git dependencies...
+# INCLUDING DEPENDENCY MoveStdlib
+# INCLUDING DEPENDENCY MovementFramework  
+# BUILDING hello-movement
+```
+
+### 빌드 결과 확인
+```bash
+# build 디렉토리 확인
+ls -la build/
+
+# 컴파일된 바이트코드 확인
+ls -la build/hello-movement/
+```
+
+## 🧪 5. 단위 테스트 작성
+
+`sources/hello.move`에 테스트 함수를 추가해봅시다.
+
+### 테스트 함수 추가
+```move
+module hello_movement::hello {
+    // ... 기존 코드 ...
+    
+    // 테스트 전용 import
+    #[test_only]
+    use std::account;
+    
+    // 기본 테스트
+    #[test(account = @0x1)]
+    fun test_init_greeting(account: &signer) acquires Greeting {
+        init_greeting(account);
+        
+        let addr = signer::address_of(account);
+        let message = get_greeting(addr);
+        let count = get_count(addr);
+        
+        assert!(message == string::utf8(b"Hello, Movement Network!"), 1);
+        assert!(count == 0, 2);
+    }
+    
+    // 카운터 테스트
+    #[test(account = @0x1)]
+    fun test_increment_count(account: &signer) acquires Greeting {
+        init_greeting(account);
+        
+        let addr = signer::address_of(account);
+        increment_count(account);
+        increment_count(account);
+        
+        let count = get_count(addr);
+        assert!(count == 2, 1);
+    }
+    
+    // 메시지 업데이트 테스트
+    #[test(account = @0x1)]  
+    fun test_update_greeting(account: &signer) acquires Greeting {
+        init_greeting(account);
+        
+        let new_message = string::utf8(b"Hello, Updated Movement!");
+        update_greeting(account, new_message);
+        
+        let addr = signer::address_of(account);
+        let message = get_greeting(addr);
+        assert!(message == string::utf8(b"Hello, Updated Movement!"), 1);
+    }
+    
+    // 실패 테스트 - 초기화 없이 접근
+    #[test(account = @0x1)]
+    #[expected_failure]
+    fun test_get_greeting_without_init(account: &signer) acquires Greeting {
+        let addr = signer::address_of(account);
+        get_greeting(addr); // 초기화 없이 접근하면 실패
+    }
+}
+```
+
+### 테스트 실행
+```bash
+# 모든 테스트 실행
+movement move test
+
+# 특정 테스트만 실행
+movement move test --filter test_init_greeting
+
+# 자세한 출력
+movement move test --verbose
+```
+
+### 테스트 결과 예시
+```bash
+PASS    hello_movement::hello::test_init_greeting
+PASS    hello_movement::hello::test_increment_count
+PASS    hello_movement::hello::test_update_greeting
+PASS    hello_movement::hello::test_get_greeting_without_init
+
+Test result: OK. Total tests: 4; passed: 4; failed: 0
+```
+
+## 🎮 6. 더 복잡한 예제: 간단한 카운터 게임
+
+좀 더 흥미로운 모듈을 만들어봅시다.
+
+### `sources/counter_game.move` 생성
+```move
+module hello_movement::counter_game {
+    use std::signer;
+    use std::string::{Self, String};
+    
+    // 에러 코드
+    const E_GAME_NOT_INITIALIZED: u64 = 1;
+    const E_ALREADY_INITIALIZED: u64 = 2;
+    const E_INVALID_GUESS: u64 = 3;
+    
+    // 게임 상태
+    struct CounterGame has key {
+        target: u64,
+        attempts: u64,
+        high_score: u64, // 최소 시도 횟수 기록
+        player_name: String,
+    }
+    
+    // 게임 초기화
+    public fun init_game(account: &signer, target: u64, player_name: String) {
+        let addr = signer::address_of(account);
+        assert!(!exists<CounterGame>(addr), E_ALREADY_INITIALIZED);
+        
+        let game = CounterGame {
+            target,
+            attempts: 0,
+            high_score: 999, // 초기값은 매우 큰 수
+            player_name,
+        };
+        
+        move_to(account, game);
+    }
+    
+    // 숫자 맞히기 시도
+    public fun make_guess(account: &signer, guess: u64): u8 acquires CounterGame {
+        let addr = signer::address_of(account);
+        assert!(exists<CounterGame>(addr), E_GAME_NOT_INITIALIZED);
+        
+        let game = borrow_global_mut<CounterGame>(addr);
+        game.attempts = game.attempts + 1;
+        
+        if (guess == game.target) {
+            // 정답! 최고 기록 갱신 확인
+            if (game.attempts < game.high_score) {
+                game.high_score = game.attempts;
+            };
+            0 // 정답
+        } else if (guess < game.target) {
+            1 // 더 큰 수
+        } else {
+            2 // 더 작은 수
+        }
+    }
+    
+    // 게임 리셋
+    public fun reset_game(account: &signer, new_target: u64) acquires CounterGame {
+        let addr = signer::address_of(account);
+        assert!(exists<CounterGame>(addr), E_GAME_NOT_INITIALIZED);
+        
+        let game = borrow_global_mut<CounterGame>(addr);
+        game.target = new_target;
+        game.attempts = 0;
+    }
+    
+    // 게임 상태 조회
+    public fun get_game_stats(addr: address): (u64, u64, String) acquires CounterGame {
+        assert!(exists<CounterGame>(addr), E_GAME_NOT_INITIALIZED);
+        let game = borrow_global<CounterGame>(addr);
+        (game.attempts, game.high_score, game.player_name)
+    }
+    
+    // 테스트들
+    #[test(player = @0x123)]
+    fun test_game_flow(player: &signer) acquires CounterGame {
+        let target = 50;
+        init_game(player, target, string::utf8(b"Alice"));
+        
+        // 첫 번째 추측 - 너무 낮음
+        let result = make_guess(player, 30);
+        assert!(result == 1, 1); // 더 큰 수
+        
+        // 두 번째 추측 - 너무 높음  
+        let result = make_guess(player, 70);
+        assert!(result == 2, 2); // 더 작은 수
+        
+        // 세 번째 추측 - 정답!
+        let result = make_guess(player, 50);
+        assert!(result == 0, 3); // 정답
+        
+        // 상태 확인
+        let addr = signer::address_of(player);
+        let (attempts, high_score, name) = get_game_stats(addr);
+        assert!(attempts == 3, 4);
+        assert!(high_score == 3, 5);
+        assert!(name == string::utf8(b"Alice"), 6);
+    }
+    
+    #[test(player = @0x456)]
+    #[expected_failure(abort_code = 1)]
+    fun test_game_not_initialized(player: &signer) acquires CounterGame {
+        make_guess(player, 50); // 게임 초기화 없이 시도
+    }
+}
+```
+
+### 게임 테스트
+```bash
+# 새 모듈까지 포함해서 빌드
+movement move build
+
+# 게임 모듈 테스트
+movement move test --filter counter_game
+```
+
+## 📚 7. Move 언어 핵심 개념 정리
+
+첫 번째 모듈을 통해 경험한 주요 개념들:
+
+### 리소스 (Resource)
+```move
+struct Greeting has key, store, drop {
+    // 디지털 자산을 안전하게 표현
+}
+```
+
+### 소유권과 차용 (Ownership & Borrowing)
+```move
+let greeting = borrow_global_mut<Greeting>(addr);
+// mutable reference로 차용
+```
+
+### 전역 저장소 (Global Storage)
+```move
+move_to(account, greeting);    // 저장
+borrow_global<Greeting>(addr); // 읽기
+move_from<Greeting>(addr);     // 이동
+```
+
+### 타입 안전성
+```move
+// 컴파일 타임에 모든 타입이 확인됨
+public fun get_count(addr: address): u64 acquires Greeting
+```
+
+## 🎯 8. 모범 사례
+
+### 에러 처리
+```move
+const E_NOT_INITIALIZED: u64 = 1;
+assert!(exists<Resource>(addr), E_NOT_INITIALIZED);
+```
+
+### 테스트 작성
+```move
+#[test(account = @0x1)]
+fun test_function(account: &signer) {
+    // 모든 공개 함수에 대한 테스트 작성
+}
+```
+
+### 문서화
+```move
+/// 인사말을 초기화하는 함수
+/// @param account 계정 서명자
+public fun init_greeting(account: &signer) {
+    // 구현
+}
+```
+
+## 🔗 다음 단계
+
+첫 번째 Move 모듈을 성공적으로 만들었다면:
+
+**[계정 생성 & Faucet 사용법 →](/getting-started/accounts-faucet)**
+
+## 📚 참고 자료
+
+- [Movement 개발자 포털](https://developer.movementnetwork.xyz/)
+- [Movement 공식 문서](https://docs.movementnetwork.xyz/)
+- [Move 언어 기본 개념](/basic-concepts)
+
+---
+
+*첫 번째 Move 모듈 완성을 축하합니다! 🎉*

@@ -1,0 +1,359 @@
+# 💳 계정 생성 & Faucet 사용법
+
+Movement Network에서 계정을 생성하고 테스트 토큰을 받는 방법을 알아보겠습니다. 개발과 테스트를 위해 필수적인 과정입니다.
+
+## 🎯 학습 목표
+
+이 섹션을 완료하면:
+- Movement CLI로 새 계정을 생성할 수 있습니다
+- 각 네트워크별로 계정을 설정할 수 있습니다  
+- Faucet에서 테스트 토큰을 받을 수 있습니다
+- 계정 정보와 잔액을 조회할 수 있습니다
+
+## 🔐 1. 계정 개념 이해
+
+### Movement 계정 구조
+```
+계정 = 주소(Address) + 개인키(Private Key) + 공개키(Public Key)
+```
+
+- **주소**: 0x로 시작하는 64자리 16진수
+- **개인키**: 거래 서명에 사용하는 비밀 키
+- **공개키**: 서명 검증에 사용하는 공개 키
+
+### 주소 형식 예시
+```
+전체 주소: 0x742d35cc6d65c86c5c2a75d8b2b7be7e3e5d2e1a3b4c5d6e7f8g9h0i1j2k3l4m
+단축 주소: 0x742d35cc...
+```
+
+## 🚀 2. CLI로 새 계정 생성
+
+### 첫 번째 계정 생성
+```bash
+# 새 계정 생성
+movement account create --account-name alice
+
+# 계정 생성 결과 확인
+movement account list
+```
+
+### 계정 생성 과정
+```bash
+$ movement account create --account-name alice
+
+Enter the network you want to use (testnet/mainnet/devnet) [testnet]: testnet
+✅ Account alice created successfully!
+
+Address: 0x742d35cc6d65c86c5c2a75d8b2b7be7e3e5d2e1a3b4c5d6e7f8g9h0i1j2k3l4m
+Public Key: 0x1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r9s0t1u2v3w4x5y6z7a8b9c0d1e2f
+```
+
+### 여러 계정 관리
+```bash
+# 개발용 계정
+movement account create --account-name dev-account
+
+# 테스트용 계정  
+movement account create --account-name test-account
+
+# 메인넷용 계정
+movement account create --account-name mainnet-account
+
+# 모든 계정 조회
+movement account list
+```
+
+## 🌐 3. 네트워크별 계정 설정
+
+Movement는 여러 네트워크를 제공합니다.
+
+### Bardock Testnet 설정
+```bash
+# 테스트넷 계정 생성
+movement account create --account-name alice-testnet --network testnet
+
+# 테스트넷 정보 확인
+movement config show-network-info --network testnet
+```
+
+### Devnet 설정
+```bash
+# 개발넷 계정 생성
+movement account create --account-name alice-devnet --network devnet
+
+# 개발넷 RPC 설정 확인
+movement config show
+```
+
+### 네트워크 정보 요약
+| 네트워크 | RPC URL | Faucet URL |
+|---------|---------|------------|
+| Bardock Testnet | `https://testnet.bardock.movementnetwork.xyz/v1` | `https://faucet.movementnetwork.xyz/` |
+| Devnet | `https://devnet.suzuka.movementnetwork.xyz/v1` | `https://faucet.devnet.suzuka.movementnetwork.xyz/` |
+| Mainnet | `https://mainnet.movementnetwork.xyz/v1` | 없음 (실제 토큰 구매 필요) |
+
+## 💰 4. Faucet에서 테스트 토큰 받기
+
+테스트와 개발을 위해 무료 토큰을 받을 수 있습니다.
+
+### CLI로 Faucet 사용
+```bash
+# 현재 계정으로 토큰 요청
+movement account fund --account-name alice-testnet
+
+# 특정 주소로 토큰 요청
+movement account fund --address 0x742d35cc6d65c86c5c2a75d8b2b7be7e3e5d2e1a3b4c5d6e7f8g9h0i1j2k3l4m
+```
+
+### 웹 UI로 Faucet 사용
+
+#### Bardock Testnet Faucet
+1. https://faucet.movementnetwork.xyz/ 접속
+2. 계정 주소 입력
+3. "Request Tokens" 클릭
+4. 1-2분 후 잔액 확인
+
+#### Devnet Faucet  
+1. https://faucet.devnet.suzuka.movementnetwork.xyz/ 접속
+2. 동일한 과정 진행
+
+### Faucet 제한사항
+- **요청 간격**: 24시간마다 1회
+- **토큰 양**: 테스트넷 100 MOVE, 개발넷 1000 MOVE
+- **용도**: 개발 및 테스트 전용
+
+## 📊 5. 계정 정보 조회
+
+### 기본 정보 확인
+```bash
+# 계정 주소 조회
+movement account show --account-name alice-testnet
+
+# 잔액 조회
+movement account balance --account-name alice-testnet
+
+# 상세 정보 조회
+movement account show --account-name alice-testnet --verbose
+```
+
+### 실행 결과 예시
+```bash
+$ movement account show --account-name alice-testnet
+
+Account alice-testnet:
+  Address: 0x742d35cc6d65c86c5c2a75d8b2b7be7e3e5d2e1a3b4c5d6e7f8g9h0i1j2k3l4m
+  Network: testnet
+  Public Key: 0x1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r9s0t1u2v3w4x5y6z7a8b9c0d1e2f
+
+$ movement account balance --account-name alice-testnet
+
+Account alice-testnet balance:
+  MOVE: 100.00000000
+  APT: 0.00000000  
+```
+
+### JSON 형식으로 조회
+```bash
+# JSON 출력
+movement account show --account-name alice-testnet --output json
+
+# 잔액만 JSON으로
+movement account balance --account-name alice-testnet --output json
+```
+
+## 🔄 6. 계정 간 토큰 전송
+
+테스트 목적으로 계정 간 토큰을 전송해봅시다.
+
+### 기본 전송
+```bash
+# alice-testnet에서 bob-testnet으로 10 MOVE 전송
+movement account transfer \
+    --from alice-testnet \
+    --to 0xBOB_ADDRESS \
+    --amount 10
+
+# 전송 확인
+movement account balance --account-name alice-testnet
+```
+
+### 전송 과정 상세 확인
+```bash
+# 전송 트랜잭션 시뮬레이션
+movement account transfer \
+    --from alice-testnet \
+    --to 0xBOB_ADDRESS \
+    --amount 10 \
+    --simulate
+
+# 실제 전송
+movement account transfer \
+    --from alice-testnet \
+    --to 0xBOB_ADDRESS \
+    --amount 10 \
+    --verbose
+```
+
+### 전송 결과 예시
+```bash
+Transaction submitted successfully!
+Transaction hash: 0xa1b2c3d4e5f6789012345678901234567890123456789012345678901234567890
+Gas used: 142
+Transaction fee: 0.00000142 MOVE
+Status: Success
+```
+
+## 🔐 7. 개인키 관리
+
+### 개인키 내보내기
+```bash
+# 개인키 추출 (보안 주의!)
+movement account export --account-name alice-testnet --output-file alice-key.txt
+```
+
+### 개인키로 계정 복구
+```bash
+# 기존 개인키로 계정 가져오기
+movement account import --account-name alice-recovered --private-key-file alice-key.txt
+```
+
+### 보안 모범 사례
+```bash
+# ❌ 절대 하지 말 것
+echo "0xYOUR_PRIVATE_KEY" # 터미널 히스토리에 남음
+
+# ✅ 안전한 방법  
+export PRIVATE_KEY="0xYOUR_PRIVATE_KEY"  # 환경변수 사용
+movement account import --account-name secure-account --private-key "$PRIVATE_KEY"
+```
+
+## 🎮 8. 실전 예제: 멀티시그 지갑
+
+간단한 멀티시그 지갑을 만들어봅시다.
+
+### 여러 계정 생성
+```bash
+# 멀티시그 참여자들
+movement account create --account-name multisig-owner1
+movement account create --account-name multisig-owner2  
+movement account create --account-name multisig-owner3
+
+# 각 계정에 토큰 요청
+movement account fund --account-name multisig-owner1
+movement account fund --account-name multisig-owner2
+movement account fund --account-name multisig-owner3
+```
+
+### 계정 정보 정리 스크립트
+```bash
+#!/bin/bash
+echo "=== 멀티시그 계정 정보 ==="
+
+for account in multisig-owner1 multisig-owner2 multisig-owner3; do
+    echo "Account: $account"
+    movement account show --account-name $account | grep "Address:"
+    movement account balance --account-name $account | grep "MOVE:"
+    echo "---"
+done
+```
+
+## 🚨 9. 문제 해결
+
+### 일반적인 문제들
+
+#### Faucet 요청 실패
+```bash
+# 에러: Too Many Requests
+# 해결: 24시간 후 다시 시도
+
+# 에러: Invalid Address
+# 해결: 주소 형식 확인
+movement account show --account-name YOUR_ACCOUNT
+```
+
+#### 잔액 조회 실패
+```bash
+# 에러: Account not found
+# 해결: 네트워크 설정 확인
+movement config show
+
+# 네트워크 변경
+movement config set-network testnet
+```
+
+#### 전송 실패
+```bash
+# 에러: Insufficient funds
+# 해결: 잔액 확인 후 Faucet 요청
+movement account balance --account-name YOUR_ACCOUNT
+
+# 에러: Invalid recipient address
+# 해결: 수신자 주소 형식 확인
+```
+
+### 네트워크 연결 문제
+```bash
+# RPC 연결 테스트
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"get_account","params":["0x1"],"id":1}' \
+  https://testnet.bardock.movementnetwork.xyz/v1
+
+# 다른 RPC 엔드포인트 시도
+movement config set-network-url https://api.testnet.movementnetwork.xyz/v1
+```
+
+## 📝 10. 계정 관리 모범 사례
+
+### 개발 환경별 계정 분리
+```bash
+# 개발용
+movement account create --account-name dev-main
+movement account create --account-name dev-test
+
+# 스테이징용
+movement account create --account-name staging-deploy
+movement account create --account-name staging-test
+
+# 프로덕션용 (메인넷)
+movement account create --account-name prod-deploy --network mainnet
+```
+
+### 백업과 복구
+```bash
+# 계정 백업 디렉토리 생성
+mkdir -p ~/movement-backups
+
+# 모든 계정 백업
+movement account list | while read account; do
+    movement account export --account-name $account --output-file ~/movement-backups/$account.key
+done
+```
+
+### 환경변수 활용
+```bash
+# .bashrc 또는 .zshrc에 추가
+export MOVEMENT_DEV_ACCOUNT="dev-main"
+export MOVEMENT_TEST_ACCOUNT="staging-test"
+export MOVEMENT_PROD_ACCOUNT="prod-deploy"
+
+# 스크립트에서 활용
+movement account balance --account-name $MOVEMENT_DEV_ACCOUNT
+```
+
+## 🔗 다음 단계
+
+계정 생성과 Faucet 사용을 마스터했다면:
+
+**[CLI 주요 명령어 →](/getting-started/cli-commands)**
+
+## 📚 참고 자료
+
+- [Movement 개발자 포털](https://developer.movementnetwork.xyz/)
+- [Movement 공식 문서](https://docs.movementnetwork.xyz/)
+- [Movement 테스트넷 Faucet](https://faucet.movementnetwork.xyz/)
+
+---
+
+*Movement Network에서 안전하게 계정을 관리하세요! 🔒*

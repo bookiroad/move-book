@@ -1,0 +1,527 @@
+# 🧪 단위 테스트 (Unit Testing)
+
+Move 코드의 품질과 안정성을 보장하기 위한 단위 테스트 작성법을 학습합니다. 테스트는 코드가 예상대로 동작하는지 확인하고 버그를 조기에 발견하는 중요한 도구입니다.
+
+## 🎯 테스트 기본 개념
+
+Move에서는 `#[test]` 어노테이션을 사용하여 테스트 함수를 정의합니다.
+
+### 기본 테스트 구조
+```move
+module movement::basic_tests {
+    // 테스트 함수는 #[test] 어노테이션 필요
+    #[test]
+    fun test_addition() {
+        let result = 2 + 3;
+        assert!(result == 5, 1);
+    }
+    
+    #[test]
+    fun test_string_operations() {
+        use std::string;
+        let hello = string::utf8(b"Hello");
+        let world = string::utf8(b"World");
+        
+        // 문자열 길이 테스트
+        assert!(string::length(&hello) == 5, 1);
+        assert!(string::length(&world) == 5, 2);
+    }
+}
+```
+
+### 테스트 전용 함수
+```move
+module movement::test_helpers {
+    // 테스트에서만 사용되는 헬퍼 함수
+    #[test_only]
+    fun create_test_account(): address {
+        @0x1234
+    }
+    
+    #[test_only]
+    fun setup_test_data(): (u64, vector<u8>) {
+        (100, b"test_data")
+    }
+    
+    #[test]
+    fun test_with_helpers() {
+        let addr = create_test_account();
+        let (amount, data) = setup_test_data();
+        
+        assert!(addr == @0x1234, 1);
+        assert!(amount == 100, 2);
+        assert!(data == b"test_data", 3);
+    }
+}
+```
+
+## ⚠️ 실패 테스트
+
+예상되는 실패 상황도 테스트할 수 있습니다.
+
+### 예상 실패 테스트
+```move
+module movement::failure_tests {
+    const E_DIVISION_BY_ZERO: u64 = 1;
+    const E_INSUFFICIENT_BALANCE: u64 = 2;
+    
+    fun divide(a: u64, b: u64): u64 {
+        assert!(b != 0, E_DIVISION_BY_ZERO);
+        a / b
+    }
+    
+    fun withdraw(balance: u64, amount: u64): u64 {
+        assert!(balance >= amount, E_INSUFFICIENT_BALANCE);
+        balance - amount
+    }
+    
+    // 정상 케이스 테스트
+    #[test]
+    fun test_divide_success() {
+        let result = divide(10, 2);
+        assert!(result == 5, 1);
+    }
+    
+    // 실패 케이스 테스트
+    #[test]
+    #[expected_failure(abort_code = 1)]
+    fun test_divide_by_zero() {
+        divide(10, 0); // E_DIVISION_BY_ZERO로 실패해야 함
+    }
+    
+    #[test]
+    #[expected_failure(abort_code = 2)]
+    fun test_insufficient_balance() {
+        withdraw(50, 100); // E_INSUFFICIENT_BALANCE로 실패해야 함
+    }
+}
+```
+
+### 다양한 실패 패턴
+```move
+module movement::advanced_failure_tests {
+    #[test]
+    #[expected_failure] // 어떤 에러든 상관없이 실패하면 성공
+    fun test_any_failure() {
+        abort 999
+    }
+    
+    #[test]
+    #[expected_failure(abort_code = 42)]
+    fun test_specific_error() {
+        abort 42 // 정확히 42 에러여야 함
+    }
+    
+    #[test]
+    #[expected_failure(location = Self)]
+    fun test_failure_location() {
+        abort 1 // 이 모듈에서 발생한 에러여야 함
+    }
+}
+```
+
+## 🏗️ 리소스 테스트
+
+리소스를 사용하는 복잡한 로직도 테스트할 수 있습니다.
+
+### 계정과 리소스 테스트
+```move
+module movement::resource_tests {
+    use std::signer;
+    use std::account;
+    
+    struct Counter has key {
+        value: u64,
+    }
+    
+    public fun init_counter(account: &signer) {
+        move_to(account, Counter { value: 0 });
+    }
+    
+    public fun increment(addr: address) acquires Counter {
+        let counter = borrow_global_mut<Counter>(addr);
+        counter.value = counter.value + 1;
+    }
+    
+    public fun get_count(addr: address): u64 acquires Counter {
+        borrow_global<Counter>(addr).value
+    }
+    
+    // 테스트 헬퍼
+    #[test_only]
+    fun create_test_signer(): signer {
+        account::create_account_for_test(@0x123)
+    }
+    
+    #[test]
+    fun test_counter_init() {
+        let account = create_test_signer();
+        init_counter(&account);
+        
+        let count = get_count(signer::address_of(&account));
+        assert!(count == 0, 1);
+    }
+    
+    #[test]
+    fun test_counter_increment() acquires Counter {
+        let account = create_test_signer();
+        let addr = signer::address_of(&account);
+        
+        init_counter(&account);
+        increment(addr);
+        increment(addr);
+        
+        let count = get_count(addr);
+        assert!(count == 2, 1);
+    }
+}
+```
+
+## 💰 실전 예제: 토큰 시스템 테스트
+
+```move
+module movement::token_tests {
+    use std::signer;
+    use std::account;
+    
+    const E_INSUFFICIENT_BALANCE: u64 = 1;
+    const E_INVALID_AMOUNT: u64 = 2;
+    
+    struct TokenStore has key {
+        balance: u64,
+    }
+    
+    public fun init_account(account: &signer) {
+        move_to(account, TokenStore { balance: 0 });
+    }
+    
+    public fun mint(account: &signer, amount: u64) acquires TokenStore {
+        assert!(amount > 0, E_INVALID_AMOUNT);
+        
+        let addr = signer::address_of(account);
+        let store = borrow_global_mut<TokenStore>(addr);
+        store.balance = store.balance + amount;
+    }
+    
+    public fun transfer(
+        from: &signer,
+        to: address,
+        amount: u64,
+    ) acquires TokenStore {
+        assert!(amount > 0, E_INVALID_AMOUNT);
+        
+        let from_addr = signer::address_of(from);
+        let from_store = borrow_global_mut<TokenStore>(from_addr);
+        assert!(from_store.balance >= amount, E_INSUFFICIENT_BALANCE);
+        
+        from_store.balance = from_store.balance - amount;
+        
+        let to_store = borrow_global_mut<TokenStore>(to);
+        to_store.balance = to_store.balance + amount;
+    }
+    
+    public fun balance_of(addr: address): u64 acquires TokenStore {
+        borrow_global<TokenStore>(addr).balance
+    }
+    
+    // 테스트 헬퍼들
+    #[test_only]
+    fun setup_accounts(): (signer, signer) {
+        let alice = account::create_account_for_test(@0xA11CE);
+        let bob = account::create_account_for_test(@0xB0B);
+        (alice, bob)
+    }
+    
+    #[test_only]
+    fun init_with_balance(account: &signer, amount: u64) acquires TokenStore {
+        init_account(account);
+        if (amount > 0) {
+            mint(account, amount);
+        }
+    }
+    
+    // 기본 기능 테스트
+    #[test]
+    fun test_mint() acquires TokenStore {
+        let alice = account::create_account_for_test(@0xA11CE);
+        init_account(&alice);
+        
+        mint(&alice, 100);
+        
+        let balance = balance_of(signer::address_of(&alice));
+        assert!(balance == 100, 1);
+    }
+    
+    #[test]
+    fun test_transfer_success() acquires TokenStore {
+        let (alice, bob) = setup_accounts();
+        init_with_balance(&alice, 100);
+        init_with_balance(&bob, 0);
+        
+        transfer(&alice, signer::address_of(&bob), 30);
+        
+        assert!(balance_of(signer::address_of(&alice)) == 70, 1);
+        assert!(balance_of(signer::address_of(&bob)) == 30, 2);
+    }
+    
+    // 에러 케이스 테스트
+    #[test]
+    #[expected_failure(abort_code = 1)]
+    fun test_transfer_insufficient_balance() acquires TokenStore {
+        let (alice, bob) = setup_accounts();
+        init_with_balance(&alice, 50);
+        init_with_balance(&bob, 0);
+        
+        transfer(&alice, signer::address_of(&bob), 100); // 잔액 부족
+    }
+    
+    #[test]
+    #[expected_failure(abort_code = 2)]
+    fun test_mint_invalid_amount() acquires TokenStore {
+        let alice = account::create_account_for_test(@0xA11CE);
+        init_account(&alice);
+        
+        mint(&alice, 0); // 잘못된 금액
+    }
+    
+    // 엣지 케이스 테스트
+    #[test]
+    fun test_multiple_transfers() acquires TokenStore {
+        let (alice, bob) = setup_accounts();
+        init_with_balance(&alice, 1000);
+        init_with_balance(&bob, 0);
+        
+        // 여러 번 전송
+        transfer(&alice, signer::address_of(&bob), 100);
+        transfer(&alice, signer::address_of(&bob), 200);
+        transfer(&alice, signer::address_of(&bob), 300);
+        
+        assert!(balance_of(signer::address_of(&alice)) == 400, 1);
+        assert!(balance_of(signer::address_of(&bob)) == 600, 2);
+    }
+}
+```
+
+## 🎮 실전 예제: 게임 로직 테스트
+
+```move
+module movement::game_tests {
+    use std::signer;
+    use std::account;
+    use std::vector;
+    
+    struct Player has key {
+        level: u8,
+        experience: u64,
+        health: u64,
+        inventory: vector<u64>, // 아이템 ID들
+    }
+    
+    struct GameConfig has key {
+        max_level: u8,
+        exp_per_level: u64,
+    }
+    
+    public fun init_player(account: &signer) {
+        move_to(account, Player {
+            level: 1,
+            experience: 0,
+            health: 100,
+            inventory: vector::empty(),
+        });
+    }
+    
+    public fun gain_exp(addr: address, amount: u64) acquires Player {
+        let player = borrow_global_mut<Player>(addr);
+        player.experience = player.experience + amount;
+        
+        // 레벨업 체크 (100 EXP당 1레벨)
+        while (player.experience >= 100 && player.level < 10) {
+            player.experience = player.experience - 100;
+            player.level = player.level + 1;
+            player.health = player.health + 20; // 레벨업시 체력 증가
+        }
+    }
+    
+    public fun add_item(addr: address, item_id: u64) acquires Player {
+        let player = borrow_global_mut<Player>(addr);
+        vector::push_back(&mut player.inventory, item_id);
+    }
+    
+    // View 함수들
+    public fun get_level(addr: address): u8 acquires Player {
+        borrow_global<Player>(addr).level
+    }
+    
+    public fun get_health(addr: address): u64 acquires Player {
+        borrow_global<Player>(addr).health
+    }
+    
+    public fun get_inventory_size(addr: address): u64 acquires Player {
+        vector::length(&borrow_global<Player>(addr).inventory)
+    }
+    
+    // 테스트들
+    #[test_only]
+    fun create_test_player(): signer {
+        account::create_account_for_test(@0xPLAYER)
+    }
+    
+    #[test]
+    fun test_player_initialization() acquires Player {
+        let player = create_test_player();
+        init_player(&player);
+        
+        let addr = signer::address_of(&player);
+        assert!(get_level(addr) == 1, 1);
+        assert!(get_health(addr) == 100, 2);
+        assert!(get_inventory_size(addr) == 0, 3);
+    }
+    
+    #[test]
+    fun test_experience_gain() acquires Player {
+        let player = create_test_player();
+        let addr = signer::address_of(&player);
+        init_player(&player);
+        
+        gain_exp(addr, 50);
+        assert!(get_level(addr) == 1, 1); // 아직 레벨업 안됨
+        
+        gain_exp(addr, 60);
+        assert!(get_level(addr) == 2, 2); // 레벨업!
+        assert!(get_health(addr) == 120, 3); // 체력 증가
+    }
+    
+    #[test]
+    fun test_multiple_level_ups() acquires Player {
+        let player = create_test_player();
+        let addr = signer::address_of(&player);
+        init_player(&player);
+        
+        gain_exp(addr, 350); // 3레벨 상당의 경험치
+        assert!(get_level(addr) == 4, 1); // 1 -> 4레벨
+        assert!(get_health(addr) == 160, 2); // 100 + 60 체력
+    }
+    
+    #[test]
+    fun test_level_cap() acquires Player {
+        let player = create_test_player();
+        let addr = signer::address_of(&player);
+        init_player(&player);
+        
+        gain_exp(addr, 2000); // 매우 많은 경험치
+        assert!(get_level(addr) == 10, 1); // 최대 레벨 10
+    }
+    
+    #[test]
+    fun test_inventory_management() acquires Player {
+        let player = create_test_player();
+        let addr = signer::address_of(&player);
+        init_player(&player);
+        
+        add_item(addr, 101); // 검
+        add_item(addr, 201); // 방패
+        add_item(addr, 301); // 포션
+        
+        assert!(get_inventory_size(addr) == 3, 1);
+    }
+}
+```
+
+## 🔍 테스트 실행
+
+### CLI 명령어
+```bash
+# 모든 테스트 실행
+movement move test
+
+# 특정 모듈의 테스트만 실행
+movement move test --filter basic_tests
+
+# 특정 함수 테스트만 실행  
+movement move test --filter test_addition
+
+# 실패 테스트도 포함하여 자세한 출력
+movement move test --verbose
+```
+
+### 테스트 결과 해석
+```bash
+# 성공 예시
+PASS    movement::basic_tests::test_addition
+PASS    movement::basic_tests::test_string_operations
+PASS    movement::failure_tests::test_divide_by_zero
+
+# 실패 예시
+FAIL    movement::token_tests::test_transfer
+        Error: Assertion failed in test_transfer
+        Location: movement::token_tests line 45
+```
+
+## 💡 테스트 모범 사례
+
+### 1. 의미 있는 테스트 이름
+```move
+// ✅ 좋은 예
+#[test]
+fun test_transfer_reduces_sender_balance() { /* ... */ }
+
+#[test]
+fun test_mint_increases_total_supply() { /* ... */ }
+
+// ❌ 피해야 할 예
+#[test]
+fun test1() { /* ... */ }
+
+#[test]
+fun test_function() { /* ... */ }
+```
+
+### 2. 각 테스트는 하나의 기능만 검증
+```move
+// ✅ 좋은 예 - 하나의 기능만 테스트
+#[test]
+fun test_mint_increases_balance() {
+    // mint 기능만 테스트
+}
+
+#[test]
+fun test_transfer_updates_both_balances() {
+    // transfer 기능만 테스트
+}
+
+// ❌ 피해야 할 예 - 여러 기능을 한 번에
+#[test]
+fun test_all_token_operations() {
+    // mint, transfer, burn 모두 테스트
+}
+```
+
+### 3. 적절한 에러 메시지
+```move
+#[test]
+fun test_balance_calculation() {
+    let balance = calculate_balance(100, 30);
+    assert!(balance == 70, 1); // 간단한 에러 코드
+    
+    // 더 나은 방법 - 의미 있는 에러 코드
+    const E_WRONG_BALANCE: u64 = 1001;
+    assert!(balance == 70, E_WRONG_BALANCE);
+}
+```
+
+## 🔗 다음 단계
+
+단위 테스트를 마스터했다면:
+- [고급 개념](/advanced-concepts) - Smart Vector, Smart Table, Resource Account
+- [dApp 개발](/dapp-development) - 실전 프로젝트 개발
+
+## 📚 참고 자료
+
+- [Movement 개발자 포털](https://developer.movementnetwork.xyz/)
+- [Movement 공식 문서](https://docs.movementnetwork.xyz/)
+- [Movement CLI 사용법](/developer-tools/movement-cli)
+
+---
+
+*철저한 테스트로 안정적인 스마트 계약을 개발하세요! 🔬*

@@ -1,0 +1,834 @@
+# 🔍 디버깅 & 모니터링
+
+Movement 개발에서 발생하는 문제를 효과적으로 해결하고 시스템을 모니터링하는 방법을 알아보겠습니다. 실전에서 바로 활용할 수 있는 디버깅 기법과 도구들을 다룹니다.
+
+## 🎯 학습 목표
+
+이 섹션을 완료하면:
+- 다양한 Move 에러를 체계적으로 디버깅할 수 있습니다
+- 트랜잭션 실행 과정을 상세히 추적할 수 있습니다
+- 성능 병목을 식별하고 최적화할 수 있습니다
+- 실시간 모니터링 시스템을 구축할 수 있습니다
+
+## 🛠️ 디버깅 도구 스택
+
+| 도구 | 용도 | 난이도 | 효과 |
+|------|------|--------|------|
+| **Movement CLI** | 기본 디버깅 | ⭐⭐ | 🎯🎯🎯🎯 |
+| **VS Code Debugger** | IDE 통합 디버깅 | ⭐⭐⭐ | 🎯🎯🎯🎯🎯 |
+| **Log Analysis** | 로그 분석 | ⭐⭐ | 🎯🎯🎯 |
+| **Transaction Tracer** | 트랜잭션 추적 | ⭐⭐⭐⭐ | 🎯🎯🎯🎯🎯 |
+| **Performance Profiler** | 성능 분석 | ⭐⭐⭐⭐⭐ | 🎯🎯🎯🎯🎯 |
+
+## 🐛 1. 기본 디버깅 기법
+
+### 컴파일 에러 해결
+```bash
+# 상세 컴파일 에러 정보
+movement move build --verbose
+
+# 특정 모듈만 체크
+movement move check --package core
+
+# 의존성 문제 확인
+movement move deps --check-conflicts
+```
+
+### 런타임 에러 디버깅
+```move
+// 디버깅용 함수 예시
+module movement::debug_utils {
+    use std::debug;
+    use std::string;
+    
+    // 디버그 출력 (테스트에서만 동작)
+    public fun debug_print(msg: vector<u8>) {
+        debug::print(&string::utf8(msg));
+    }
+    
+    // 조건부 디버그
+    public fun debug_assert(condition: bool, msg: vector<u8>) {
+        if (!condition) {
+            debug::print(&string::utf8(b"Debug Assert Failed: "));
+            debug::print(&string::utf8(msg));
+        }
+        assert!(condition, 999);
+    }
+    
+    // 값 추적
+    public fun trace_value<T: drop>(label: vector<u8>, value: T): T {
+        debug::print(&string::utf8(label));
+        debug::print(&value);
+        value
+    }
+}
+```
+
+### 에러 코드 체계화
+```move
+module movement::error_codes {
+    // 에러 카테고리별 분류
+    
+    // 권한 관련 (1000번대)
+    public fun e_not_authorized(): u64 { 1001 }
+    public fun e_not_owner(): u64 { 1002 }
+    public fun e_insufficient_permission(): u64 { 1003 }
+    
+    // 상태 관련 (2000번대)  
+    public fun e_already_exists(): u64 { 2001 }
+    public fun e_not_found(): u64 { 2002 }
+    public fun e_invalid_state(): u64 { 2003 }
+    
+    // 입력 검증 (3000번대)
+    public fun e_invalid_address(): u64 { 3001 }
+    public fun e_invalid_amount(): u64 { 3002 }
+    public fun e_invalid_parameter(): u64 { 3003 }
+    
+    // 리소스 관련 (4000번대)
+    public fun e_insufficient_balance(): u64 { 4001 }
+    public fun e_resource_exhausted(): u64 { 4002 }
+    public fun e_quota_exceeded(): u64 { 4003 }
+    
+    // 에러 메시지 헬퍼
+    public fun get_error_message(code: u64): vector<u8> {
+        if (code == 1001) b"Not authorized"
+        else if (code == 1002) b"Not owner"
+        else if (code == 2001) b"Already exists"
+        else if (code == 2002) b"Not found"
+        else if (code == 3001) b"Invalid address"
+        else if (code == 4001) b"Insufficient balance"
+        else b"Unknown error"
+    }
+}
+```
+
+## 🔬 2. 고급 디버깅 도구
+
+### 트랜잭션 추적기
+```typescript
+// utils/transactionTracer.ts
+import { MovementClient } from '@movementlabs/movement-sdk';
+
+export class TransactionTracer {
+    private client: MovementClient;
+    
+    constructor(client: MovementClient) {
+        this.client = client;
+    }
+    
+    // 트랜잭션 상세 분석
+    async traceTransaction(txHash: string): Promise<TransactionTrace> {
+        console.log(`🔍 트랜잭션 추적 시작: ${txHash}`);
+        
+        try {
+            // 1. 기본 트랜잭션 정보
+            const txInfo = await this.client.getTransactionByHash(txHash);
+            console.log('📋 기본 정보:', {
+                sender: txInfo.sender,
+                sequence_number: txInfo.sequence_number,
+                gas_used: txInfo.gas_used,
+                success: txInfo.success
+            });
+            
+            // 2. 실행 과정 분석
+            const executionTrace = await this.analyzeExecution(txInfo);
+            
+            // 3. 상태 변경 추적
+            const stateChanges = await this.traceStateChanges(txInfo);
+            
+            // 4. 이벤트 분석
+            const events = await this.analyzeEvents(txInfo);
+            
+            // 5. 가스 사용량 분석
+            const gasAnalysis = this.analyzeGasUsage(txInfo);
+            
+            return {
+                transaction: txInfo,
+                execution: executionTrace,
+                stateChanges: stateChanges,
+                events: events,
+                gasAnalysis: gasAnalysis
+            };
+            
+        } catch (error) {
+            console.error('❌ 트랜잭션 추적 실패:', error);
+            throw error;
+        }
+    }
+    
+    private async analyzeExecution(txInfo: any): Promise<ExecutionTrace> {
+        // VM 실행 과정 분석
+        const vmLogs = txInfo.vm_status?.type === "executed" 
+            ? await this.getVMExecutionLogs(txInfo.hash)
+            : null;
+            
+        return {
+            status: txInfo.vm_status?.type,
+            executionTime: txInfo.timestamp,
+            vmLogs: vmLogs,
+            functionCalls: this.extractFunctionCalls(txInfo.payload)
+        };
+    }
+    
+    private async traceStateChanges(txInfo: any): Promise<StateChange[]> {
+        const changes: StateChange[] = [];
+        
+        // write_set에서 상태 변경 추출
+        if (txInfo.changes) {
+            for (const change of txInfo.changes) {
+                changes.push({
+                    address: change.address,
+                    type: change.type,
+                    resource: change.data?.type,
+                    before: change.data?.data_before,
+                    after: change.data?.data_after
+                });
+            }
+        }
+        
+        return changes;
+    }
+    
+    private analyzeGasUsage(txInfo: any): GasAnalysis {
+        return {
+            gasUsed: parseInt(txInfo.gas_used),
+            gasLimit: parseInt(txInfo.max_gas_amount),
+            gasPrice: parseInt(txInfo.gas_unit_price),
+            totalCost: parseInt(txInfo.gas_used) * parseInt(txInfo.gas_unit_price),
+            efficiency: (parseInt(txInfo.gas_used) / parseInt(txInfo.max_gas_amount)) * 100
+        };
+    }
+}
+
+// 타입 정의
+interface TransactionTrace {
+    transaction: any;
+    execution: ExecutionTrace;
+    stateChanges: StateChange[];
+    events: any[];
+    gasAnalysis: GasAnalysis;
+}
+
+interface ExecutionTrace {
+    status: string;
+    executionTime: string;
+    vmLogs: any;
+    functionCalls: string[];
+}
+
+interface StateChange {
+    address: string;
+    type: string;
+    resource: string;
+    before: any;
+    after: any;
+}
+
+interface GasAnalysis {
+    gasUsed: number;
+    gasLimit: number;
+    gasPrice: number;
+    totalCost: number;
+    efficiency: number;
+}
+```
+
+### 실시간 로그 모니터링
+```bash
+#!/bin/bash
+# scripts/monitor-logs.sh
+
+echo "=== Movement 실시간 로그 모니터링 ==="
+
+# 로그 레벨 설정
+export RUST_LOG="movement=debug,movement::compiler=trace"
+
+# 컬러 출력 설정
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# 로그 필터링 함수
+filter_logs() {
+    while IFS= read -r line; do
+        if [[ $line == *"ERROR"* ]]; then
+            echo -e "${RED}$line${NC}"
+        elif [[ $line == *"WARN"* ]]; then
+            echo -e "${YELLOW}$line${NC}"
+        elif [[ $line == *"INFO"* ]]; then
+            echo -e "${GREEN}$line${NC}"
+        elif [[ $line == *"DEBUG"* ]]; then
+            echo -e "${BLUE}$line${NC}"
+        else
+            echo "$line"
+        fi
+    done
+}
+
+# Movement 프로세스 실행 및 로그 감시
+movement move test --verbose 2>&1 | filter_logs
+```
+
+### 성능 프로파일러
+```rust
+// tools/profiler.rs
+use std::time::{Duration, Instant};
+use std::collections::HashMap;
+
+pub struct PerformanceProfiler {
+    timers: HashMap<String, Instant>,
+    results: HashMap<String, Duration>,
+}
+
+impl PerformanceProfiler {
+    pub fn new() -> Self {
+        Self {
+            timers: HashMap::new(),
+            results: HashMap::new(),
+        }
+    }
+    
+    // 타이머 시작
+    pub fn start_timer(&mut self, name: &str) {
+        self.timers.insert(name.to_string(), Instant::now());
+    }
+    
+    // 타이머 종료
+    pub fn end_timer(&mut self, name: &str) -> Duration {
+        if let Some(start_time) = self.timers.remove(name) {
+            let duration = start_time.elapsed();
+            self.results.insert(name.to_string(), duration);
+            duration
+        } else {
+            Duration::from_secs(0)
+        }
+    }
+    
+    // 함수 실행 시간 측정
+    pub fn profile_function<F, R>(&mut self, name: &str, func: F) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        self.start_timer(name);
+        let result = func();
+        let duration = self.end_timer(name);
+        
+        println!("⏱️ {}: {:?}", name, duration);
+        result
+    }
+    
+    // 결과 리포트 생성
+    pub fn generate_report(&self) -> String {
+        let mut report = String::from("=== 성능 프로파일링 결과 ===\n");
+        
+        let mut sorted_results: Vec<_> = self.results.iter().collect();
+        sorted_results.sort_by(|a, b| b.1.cmp(a.1)); // 시간 순으로 정렬
+        
+        for (name, duration) in sorted_results {
+            report.push_str(&format!("{}: {:?}\n", name, duration));
+        }
+        
+        report
+    }
+    
+    // 병목 지점 식별
+    pub fn identify_bottlenecks(&self, threshold_ms: u64) -> Vec<String> {
+        self.results
+            .iter()
+            .filter(|(_, duration)| duration.as_millis() > threshold_ms as u128)
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+}
+
+// 매크로로 쉬운 사용
+#[macro_export]
+macro_rules! profile {
+    ($profiler:expr, $name:expr, $code:block) => {
+        $profiler.profile_function($name, || $code)
+    };
+}
+```
+
+## 📊 3. 모니터링 시스템
+
+### 메트릭 수집기
+```typescript
+// monitoring/metricsCollector.ts
+export class MetricsCollector {
+    private metrics: Map<string, number[]> = new Map();
+    private client: MovementClient;
+    
+    constructor(client: MovementClient) {
+        this.client = client;
+    }
+    
+    // 네트워크 상태 모니터링
+    async collectNetworkMetrics(): Promise<NetworkMetrics> {
+        const startTime = Date.now();
+        
+        try {
+            // 블록 높이
+            const ledgerInfo = await this.client.getLedgerInfo();
+            const blockHeight = parseInt(ledgerInfo.block_height);
+            
+            // 트랜잭션 처리량 (TPS)
+            const tps = await this.calculateTPS();
+            
+            // 네트워크 지연시간
+            const latency = Date.now() - startTime;
+            
+            // 가스 가격
+            const gasPrice = await this.getAverageGasPrice();
+            
+            const metrics = {
+                blockHeight,
+                tps,
+                latency,
+                gasPrice,
+                timestamp: new Date().toISOString()
+            };
+            
+            this.recordMetric('network', metrics);
+            return metrics;
+            
+        } catch (error) {
+            console.error('네트워크 메트릭 수집 실패:', error);
+            throw error;
+        }
+    }
+    
+    // 계정 메트릭 모니터링
+    async collectAccountMetrics(address: string): Promise<AccountMetrics> {
+        try {
+            const accountInfo = await this.client.getAccount(address);
+            const balance = await this.client.getAccountBalance(address);
+            const resources = await this.client.getAccountResources(address);
+            const transactions = await this.client.getAccountTransactions(address, { limit: 100 });
+            
+            const metrics = {
+                address,
+                balance: parseInt(balance),
+                sequenceNumber: parseInt(accountInfo.sequence_number),
+                resourceCount: resources.length,
+                transactionCount: transactions.length,
+                lastActivity: transactions[0]?.timestamp || null,
+                timestamp: new Date().toISOString()
+            };
+            
+            this.recordMetric('account', metrics);
+            return metrics;
+            
+        } catch (error) {
+            console.error('계정 메트릭 수집 실패:', error);
+            throw error;
+        }
+    }
+    
+    // 스마트 계약 메트릭
+    async collectContractMetrics(contractAddress: string): Promise<ContractMetrics> {
+        try {
+            const modules = await this.client.getAccountModules(contractAddress);
+            const resources = await this.client.getAccountResources(contractAddress);
+            const events = await this.client.getEventsByCreationNumber(contractAddress);
+            
+            const metrics = {
+                contractAddress,
+                moduleCount: modules.length,
+                resourceCount: resources.length,
+                eventCount: events.length,
+                lastEvent: events[0]?.timestamp || null,
+                timestamp: new Date().toISOString()
+            };
+            
+            this.recordMetric('contract', metrics);
+            return metrics;
+            
+        } catch (error) {
+            console.error('계약 메트릭 수집 실패:', error);
+            throw error;
+        }
+    }
+    
+    private async calculateTPS(): Promise<number> {
+        // 최근 블록들의 트랜잭션 수를 기반으로 TPS 계산
+        const ledgerInfo = await this.client.getLedgerInfo();
+        const currentHeight = parseInt(ledgerInfo.block_height);
+        
+        // 최근 10개 블록 분석
+        let totalTxs = 0;
+        let totalTime = 0;
+        
+        for (let i = 0; i < 10; i++) {
+            try {
+                const blockInfo = await this.client.getBlockByHeight(currentHeight - i);
+                totalTxs += blockInfo.transactions?.length || 0;
+                // 블록 시간 간격 계산 (간소화)
+                totalTime += 1; // 1초로 가정
+            } catch (error) {
+                // 블록 정보를 가져올 수 없으면 건너뛰기
+                continue;
+            }
+        }
+        
+        return totalTime > 0 ? totalTxs / totalTime : 0;
+    }
+    
+    private async getAverageGasPrice(): Promise<number> {
+        // 최근 트랜잭션들의 평균 가스 가격 계산
+        try {
+            const transactions = await this.client.getTransactions({ limit: 100 });
+            let totalGasPrice = 0;
+            let count = 0;
+            
+            for (const tx of transactions) {
+                if (tx.gas_unit_price) {
+                    totalGasPrice += parseInt(tx.gas_unit_price);
+                    count++;
+                }
+            }
+            
+            return count > 0 ? totalGasPrice / count : 0;
+        } catch (error) {
+            console.error('가스 가격 계산 실패:', error);
+            return 0;
+        }
+    }
+    
+    private recordMetric(type: string, data: any): void {
+        if (!this.metrics.has(type)) {
+            this.metrics.set(type, []);
+        }
+        
+        const metrics = this.metrics.get(type)!;
+        metrics.push(data);
+        
+        // 최근 1000개 데이터만 유지
+        if (metrics.length > 1000) {
+            metrics.shift();
+        }
+    }
+    
+    // 메트릭 내보내기
+    getMetrics(type: string): any[] {
+        return this.metrics.get(type) || [];
+    }
+    
+    // 알람 조건 체크
+    checkAlerts(): Alert[] {
+        const alerts: Alert[] = [];
+        
+        // TPS 알람
+        const networkMetrics = this.getMetrics('network');
+        if (networkMetrics.length > 0) {
+            const latestTPS = networkMetrics[networkMetrics.length - 1].tps;
+            if (latestTPS < 1) {
+                alerts.push({
+                    type: 'LOW_TPS',
+                    message: `낮은 TPS 감지: ${latestTPS}`,
+                    severity: 'warning'
+                });
+            }
+        }
+        
+        // 가스 가격 알람
+        const gasPrice = networkMetrics.length > 0 ? networkMetrics[networkMetrics.length - 1].gasPrice : 0;
+        if (gasPrice > 1000) {
+            alerts.push({
+                type: 'HIGH_GAS_PRICE',
+                message: `높은 가스 가격: ${gasPrice}`,
+                severity: 'warning'
+            });
+        }
+        
+        return alerts;
+    }
+}
+
+// 타입 정의
+interface NetworkMetrics {
+    blockHeight: number;
+    tps: number;
+    latency: number;
+    gasPrice: number;
+    timestamp: string;
+}
+
+interface AccountMetrics {
+    address: string;
+    balance: number;
+    sequenceNumber: number;
+    resourceCount: number;
+    transactionCount: number;
+    lastActivity: string | null;
+    timestamp: string;
+}
+
+interface ContractMetrics {
+    contractAddress: string;
+    moduleCount: number;
+    resourceCount: number;
+    eventCount: number;
+    lastEvent: string | null;
+    timestamp: string;
+}
+
+interface Alert {
+    type: string;
+    message: string;
+    severity: 'info' | 'warning' | 'error';
+}
+```
+
+### 실시간 대시보드
+```typescript
+// components/MonitoringDashboard.tsx
+import React, { useState, useEffect } from 'react';
+import { Line, Bar, Doughnut } from 'react-chartjs-2';
+import { MetricsCollector } from '../monitoring/metricsCollector';
+
+export const MonitoringDashboard: React.FC = () => {
+    const [networkMetrics, setNetworkMetrics] = useState<any[]>([]);
+    const [alerts, setAlerts] = useState<any[]>([]);
+    const [loading, setLoading] = useState(true);
+    
+    useEffect(() => {
+        const metricsCollector = new MetricsCollector(client);
+        
+        const collectMetrics = async () => {
+            try {
+                await metricsCollector.collectNetworkMetrics();
+                const metrics = metricsCollector.getMetrics('network');
+                const currentAlerts = metricsCollector.checkAlerts();
+                
+                setNetworkMetrics(metrics);
+                setAlerts(currentAlerts);
+            } catch (error) {
+                console.error('메트릭 수집 실패:', error);
+            } finally {
+                setLoading(false);
+            }
+        };
+        
+        // 초기 수집
+        collectMetrics();
+        
+        // 30초마다 업데이트
+        const interval = setInterval(collectMetrics, 30000);
+        
+        return () => clearInterval(interval);
+    }, []);
+    
+    const tpsData = {
+        labels: networkMetrics.map(m => new Date(m.timestamp).toLocaleTimeString()),
+        datasets: [{
+            label: 'TPS (Transactions Per Second)',
+            data: networkMetrics.map(m => m.tps),
+            borderColor: 'rgb(75, 192, 192)',
+            backgroundColor: 'rgba(75, 192, 192, 0.2)',
+            tension: 0.1
+        }]
+    };
+    
+    const latencyData = {
+        labels: networkMetrics.map(m => new Date(m.timestamp).toLocaleTimeString()),
+        datasets: [{
+            label: '네트워크 지연시간 (ms)',
+            data: networkMetrics.map(m => m.latency),
+            borderColor: 'rgb(255, 99, 132)',
+            backgroundColor: 'rgba(255, 99, 132, 0.2)',
+            tension: 0.1
+        }]
+    };
+    
+    if (loading) {
+        return (
+            <div className="flex justify-center items-center h-64">
+                <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-blue-500"></div>
+            </div>
+        );
+    }
+    
+    return (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 p-6">
+            {/* 알람 패널 */}
+            <div className="lg:col-span-3">
+                <div className="bg-white rounded-lg shadow p-4">
+                    <h3 className="text-lg font-semibold mb-4">🚨 실시간 알람</h3>
+                    {alerts.length > 0 ? (
+                        <div className="space-y-2">
+                            {alerts.map((alert, index) => (
+                                <div
+                                    key={index}
+                                    className={`p-3 rounded ${
+                                        alert.severity === 'error' ? 'bg-red-100 text-red-700' :
+                                        alert.severity === 'warning' ? 'bg-yellow-100 text-yellow-700' :
+                                        'bg-blue-100 text-blue-700'
+                                    }`}
+                                >
+                                    <span className="font-medium">{alert.type}:</span> {alert.message}
+                                </div>
+                            ))}
+                        </div>
+                    ) : (
+                        <p className="text-gray-500">현재 알람이 없습니다</p>
+                    )}
+                </div>
+            </div>
+            
+            {/* TPS 차트 */}
+            <div className="bg-white rounded-lg shadow p-4">
+                <h3 className="text-lg font-semibold mb-4">📊 TPS</h3>
+                <Line data={tpsData} options={{ responsive: true }} />
+            </div>
+            
+            {/* 지연시간 차트 */}
+            <div className="bg-white rounded-lg shadow p-4">
+                <h3 className="text-lg font-semibold mb-4">⏱️ 네트워크 지연시간</h3>
+                <Line data={latencyData} options={{ responsive: true }} />
+            </div>
+            
+            {/* 현재 상태 */}
+            <div className="bg-white rounded-lg shadow p-4">
+                <h3 className="text-lg font-semibold mb-4">📈 현재 상태</h3>
+                {networkMetrics.length > 0 && (
+                    <div className="space-y-3">
+                        <div className="flex justify-between">
+                            <span>블록 높이:</span>
+                            <span className="font-mono">{networkMetrics[networkMetrics.length - 1].blockHeight}</span>
+                        </div>
+                        <div className="flex justify-between">
+                            <span>현재 TPS:</span>
+                            <span className="font-mono">{networkMetrics[networkMetrics.length - 1].tps.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between">
+                            <span>평균 가스 가격:</span>
+                            <span className="font-mono">{networkMetrics[networkMetrics.length - 1].gasPrice}</span>
+                        </div>
+                        <div className="flex justify-between">
+                            <span>마지막 업데이트:</span>
+                            <span className="text-sm text-gray-500">
+                                {new Date(networkMetrics[networkMetrics.length - 1].timestamp).toLocaleString()}
+                            </span>
+                        </div>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+};
+```
+
+## 🚨 4. 에러 해결 가이드
+
+### 일반적인 Move 에러들
+
+#### 1. 소유권 및 차용 에러
+```move
+// ❌ 잘못된 예
+fun wrong_borrow() {
+    let x = 10;
+    let y = &x;
+    let z = &mut x; // 에러: 이미 불변 참조가 존재함
+}
+
+// ✅ 올바른 예  
+fun correct_borrow() {
+    let mut x = 10;
+    {
+        let y = &x; // 불변 참조
+        // y 사용
+    } // y 스코프 종료
+    let z = &mut x; // 가변 참조 가능
+}
+```
+
+#### 2. 리소스 이동 에러
+```move
+// ❌ 잘못된 예
+fun resource_move_error() {
+    let resource = MyResource { value: 100 };
+    use_resource(resource);
+    use_resource(resource); // 에러: 리소스가 이미 이동됨
+}
+
+// ✅ 올바른 예
+fun resource_move_correct() {
+    let resource = MyResource { value: 100 };
+    use_resource(copy resource); // copy ability 필요
+    use_resource(resource);
+}
+```
+
+#### 3. 타입 불일치 에러
+```move
+// ❌ 잘못된 예
+fun type_mismatch() {
+    let x: u64 = 100;
+    let y: u8 = x; // 에러: u64를 u8에 직접 할당 불가
+}
+
+// ✅ 올바른 예
+fun type_cast_correct() {
+    let x: u64 = 100;
+    assert!(x <= 255, 1); // 범위 검사
+    let y: u8 = (x as u8); // 명시적 캐스팅
+}
+```
+
+### 디버깅 체크리스트
+```bash
+# 디버깅 체크리스트 스크립트
+#!/bin/bash
+
+echo "=== Move 디버깅 체크리스트 ==="
+
+# 1. 컴파일 확인
+echo "1. 컴파일 확인..."
+if movement move build; then
+    echo "✅ 컴파일 성공"
+else
+    echo "❌ 컴파일 실패 - 문법 오류 확인 필요"
+    exit 1
+fi
+
+# 2. 린트 검사
+echo "2. 린트 검사..."
+movement move check
+
+# 3. 테스트 실행
+echo "3. 테스트 실행..."
+if movement move test --verbose; then
+    echo "✅ 모든 테스트 통과"
+else
+    echo "❌ 테스트 실패 - 로직 오류 확인 필요"
+fi
+
+# 4. 가스 사용량 확인
+echo "4. 가스 사용량 분석..."
+movement move test --gas-profile
+
+# 5. 의존성 확인
+echo "5. 의존성 확인..."
+movement move deps --check-updates
+
+echo "디버깅 체크리스트 완료!"
+```
+
+## 🔗 다음 단계
+
+디버깅 도구를 마스터했다면:
+
+**[테스트 프레임워크 →](/developer-tools/testing-framework)**
+
+## 📚 참고 자료
+
+- [Movement 개발자 포털](https://developer.movementnetwork.xyz/)
+- [Movement 공식 문서](https://docs.movementnetwork.xyz/)
+- [Move 디버깅 가이드](https://move-language.github.io/move/debugging.html)
+
+---
+
+*체계적인 디버깅으로 안정적인 코드를 만드세요! 🔍🛠️*

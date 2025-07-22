@@ -1,0 +1,9 @@
+{
+  "index": "개요",
+  "movement-cli-guide": "📋 Movement CLI 상세 가이드",
+  "sdk-collection": "🛠️ SDK 모음 (TS/Python/Rust)",
+  "wallet-integration": "💳 Wallet 연동 도구",
+  "ide-setup": "💻 개발 환경 (VS Code/IntelliJ)",
+  "debugging-tools": "🔍 디버깅 & 모니터링",
+  "testing-framework": "🧪 테스트 프레임워크"
+}

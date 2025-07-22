@@ -1,0 +1,190 @@
+# 📐 데이터 타입 (Data Types)
+
+Move 언어의 기본 데이터 타입들을 알아봅니다. Move는 타입 안전성을 중시하는 언어로, 각 타입별 특징과 사용법을 정확히 이해하는 것이 중요합니다.
+
+## 🔢 정수형 (Integer Types)
+
+Move는 다양한 크기의 부호 없는 정수형을 제공합니다:
+
+### 정수 타입 종류
+- **u8**: 8비트 (0 ~ 255)
+- **u64**: 64비트 (0 ~ 18,446,744,073,709,551,615)  
+- **u128**: 128비트 (매우 큰 수)
+- **u256**: 256비트 (블록체인에서 자주 사용)
+
+### 사용 예시
+```move
+module movement::integers_example {
+    fun integer_examples() {
+        let small_number: u8 = 42;
+        let balance: u64 = 1000000;
+        let large_amount: u128 = 999999999999999999999999999999;
+        let hash_value: u256 = 0x1234567890abcdef;
+        
+        // 타입 추론도 가능
+        let auto_inferred = 100; // u64가 기본값
+    }
+}
+```
+
+## ✅ 불린형 (Boolean)
+
+참/거짓 값을 나타내는 타입입니다:
+
+```move
+module movement::boolean_example {
+    fun boolean_examples() {
+        let is_valid: bool = true;
+        let is_completed: bool = false;
+        
+        // 논리 연산
+        let result = is_valid && !is_completed;
+        let another = is_valid || is_completed;
+    }
+}
+```
+
+## 📍 주소형 (Address)
+
+블록체인 상의 전역 주소를 나타냅니다:
+
+```move
+module movement::address_example {
+    fun address_examples() {
+        let addr1: address = @0x1;
+        let addr2: address = @0x42;
+        let my_address: address = @movement;
+        
+        // 주소 비교
+        let is_same = addr1 == addr2; // false
+    }
+}
+```
+
+### 주소 표기법
+- **16진수**: `@0x1`, `@0x42abc`
+- **명명된 주소**: `@movement`, `@aptos_framework`
+- **변수**: Move.toml에서 정의된 명명된 주소
+
+## ✍️ 서명자형 (Signer)
+
+트랜잭션 서명자 정보를 담는 특별한 타입입니다:
+
+```move
+module movement::signer_example {
+    use std::signer;
+    
+    public fun signer_examples(account: &signer) {
+        let addr = signer::address_of(account);
+        // signer를 통해서만 해당 주소에 리소스를 저장할 수 있음
+    }
+}
+```
+
+### Signer 특징
+- **권한 증명**: 특정 주소의 소유권을 증명
+- **리소스 관리**: `move_to`에서 필수적으로 사용
+- **보안**: 위조 불가능한 타입
+
+## 📝 문자열과 벡터 (String & Vector)
+
+### Vector 기본 사용법
+```move
+module movement::vector_example {
+    use std::vector;
+    
+    fun vector_examples() {
+        // 빈 벡터 생성
+        let numbers = vector::empty<u64>();
+        
+        // 요소 추가
+        vector::push_back(&mut numbers, 1);
+        vector::push_back(&mut numbers, 2);
+        vector::push_back(&mut numbers, 3);
+        
+        // 요소 접근
+        let first = vector::borrow(&numbers, 0); // &1
+        
+        // 길이 확인
+        let len = vector::length(&numbers); // 3
+    }
+}
+```
+
+### String 사용법
+```move
+module movement::string_example {
+    use std::string;
+    
+    fun string_examples() {
+        // UTF-8 문자열 생성
+        let hello = string::utf8(b"Hello, Movement!");
+        let korean = string::utf8(b"안녕하세요");
+        
+        // 문자열은 vector<u8>의 wrapper
+        let bytes = string::bytes(&hello);
+    }
+}
+```
+
+## 🔄 타입 변환
+
+Move는 암시적 타입 변환을 지원하지 않습니다. 명시적 캐스팅이 필요합니다:
+
+```move
+module movement::casting_example {
+    fun casting_examples() {
+        let small: u8 = 100;
+        let large: u64 = (small as u64); // 명시적 캐스팅
+        
+        // 주의: 큰 타입에서 작은 타입으로는 위험할 수 있음
+        let back_to_small: u8 = (large as u8);
+    }
+}
+```
+
+## 💡 모범 사례
+
+### 1. 적절한 정수 타입 선택
+```move
+// 좋은 예
+let token_amount: u64 = 1000000; // 토큰 수량
+let user_age: u8 = 25;          // 나이 (0-255면 충분)
+let large_calculation: u128 = 999999999999999; // 큰 계산
+
+// 피해야 할 예  
+let small_counter: u256 = 5;     // 너무 큰 타입 사용
+```
+
+### 2. 벡터 초기화 최적화
+```move
+// 좋은 예
+let items = vector::empty<Item>();
+
+// 또는 리터럴 사용
+let numbers = vector[1, 2, 3, 4, 5];
+```
+
+### 3. 안전한 타입 변환
+```move
+fun safe_conversion(value: u128): u64 {
+    assert!(value <= (18446744073709551615 as u128), ERROR_OVERFLOW);
+    (value as u64)
+}
+```
+
+## 🔗 다음 단계
+
+데이터 타입을 이해했다면 다음으로 넘어가세요:
+- [모듈과 리소스](/basic-concepts/modules-resources)
+- [제어 구조](/basic-concepts/control-structures)
+
+## 📚 참고 자료
+
+- [Movement 개발자 포털](https://developer.movementnetwork.xyz/)
+- [Movement 공식 문서](https://docs.movementnetwork.xyz/)
+- [Movement CLI 사용법](/developer-tools/movement-cli)
+
+---
+
+*정확한 타입 사용이 안전한 스마트 계약의 첫걸음입니다! 🎯*

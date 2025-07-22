@@ -1,0 +1,828 @@
+# 💻 개발 환경 (VS Code / IntelliJ)
+
+Movement 개발을 위한 최적의 IDE 환경을 구성하는 방법을 알아보겠습니다. VS Code와 IntelliJ IDEA 모두를 다루며, 각각의 장점을 최대한 활용하는 방법을 제시합니다.
+
+## 🎯 학습 목표
+
+이 섹션을 완료하면:
+- VS Code를 Movement 개발에 완벽히 최적화할 수 있습니다
+- IntelliJ IDEA에서 Move 언어를 효율적으로 사용할 수 있습니다
+- 각 IDE의 고급 기능을 활용한 생산성 향상 기법을 익힐 수 있습니다
+- 팀 협업을 위한 공유 설정을 구성할 수 있습니다
+
+## 📊 IDE 비교
+
+| 기능 | VS Code | IntelliJ IDEA |
+|------|---------|---------------|
+| **무료 버전** | ✅ 완전 무료 | ✅ Community Edition |
+| **Move 지원** | ⭐⭐⭐⭐ | ⭐⭐⭐ |
+| **확장성** | 🌟🌟🌟🌟🌟 | 🌟🌟🌟🌟 |
+| **성능** | ⚡⚡⚡⚡ | ⚡⚡⚡ |
+| **디버깅** | 🔍🔍🔍 | 🔍🔍🔍🔍🔍 |
+| **리팩토링** | 🛠️🛠️🛠️ | 🛠️🛠️🛠️🛠️🛠️ |
+
+## 🆚 1. VS Code 완전 설정
+
+### 필수 확장 프로그램 설치
+```bash
+# 자동 설치 스크립트
+#!/bin/bash
+echo "=== VS Code Movement 확장 설치 ==="
+
+# 핵심 확장들
+extensions=(
+    # Move 언어 지원
+    "PontemNetwork.move-language"
+    "move-language.move-syntax"
+    
+    # Rust 지원 (Move 기반)
+    "rust-lang.rust-analyzer"
+    "vadimcn.vscode-lldb"
+    
+    # 개발 생산성
+    "ms-vscode.vscode-typescript-next"
+    "bradlc.vscode-tailwindcss"
+    "esbenp.prettier-vscode"
+    
+    # Git & 협업
+    "eamodio.gitlens"
+    "GitHub.vscode-pull-request-github"
+    "ms-vsliveshare.vsliveshare"
+    
+    # 디버깅 & 테스트
+    "hbenl.vscode-test-explorer" 
+    "usernamehw.errorlens"
+    "ms-vscode.vscode-json"
+    
+    # UI & 테마
+    "PKief.material-icon-theme"
+    "GitHub.github-vscode-theme"
+    "vscode-icons-team.vscode-icons"
+)
+
+for extension in "${extensions[@]}"; do
+    echo "설치 중: $extension"
+    code --install-extension "$extension"
+done
+
+echo "VS Code 확장 설치 완료! ✅"
+```
+
+### 완전한 settings.json
+```json
+{
+    // === Move 언어 설정 ===
+    "move.compiler.path": "/usr/local/bin/movement",
+    "move.enableTelemetry": false,
+    "move.server.path": "/usr/local/bin/movement-language-server",
+    "move.linting.enable": true,
+    "move.formatting.enable": true,
+    "move.inlayHints.enable": true,
+    "move.semanticHighlighting.enable": true,
+    
+    // === Rust 분석기 설정 ===
+    "rust-analyzer.enable": true,
+    "rust-analyzer.checkOnSave.command": "clippy",
+    "rust-analyzer.cargo.allFeatures": true,
+    "rust-analyzer.procMacro.enable": true,
+    "rust-analyzer.diagnostics.experimental.enable": true,
+    
+    // === 파일 연결 ===
+    "files.associations": {
+        "*.move": "move",
+        "Move.toml": "toml",
+        "*.mvir": "move"
+    },
+    
+    // === 에디터 설정 ===
+    "editor.formatOnSave": true,
+    "editor.formatOnPaste": true,
+    "editor.formatOnType": true,
+    "editor.codeActionsOnSave": {
+        "source.fixAll": true,
+        "source.organizeImports": true,
+        "source.removeUnused": true
+    },
+    
+    // === Move 특화 설정 ===
+    "[move]": {
+        "editor.tabSize": 4,
+        "editor.insertSpaces": true,
+        "editor.trimAutoWhitespace": true,
+        "editor.rulers": [100],
+        "editor.wordWrap": "bounded",
+        "editor.wordWrapColumn": 100
+    },
+    
+    // === 자동완성 최적화 ===
+    "editor.suggest.localityBonus": true,
+    "editor.suggest.shareSuggestSelections": true,
+    "editor.wordBasedSuggestions": false,
+    "editor.parameterHints.enabled": true,
+    "editor.parameterHints.cycle": true,
+    "editor.acceptSuggestionOnCommitCharacter": false,
+    
+    // === 터미널 설정 ===
+    "terminal.integrated.defaultProfile.linux": "bash",
+    "terminal.integrated.cwd": "${workspaceFolder}",
+    "terminal.integrated.env.linux": {
+        "MOVEMENT_HOME": "${workspaceFolder}",
+        "RUST_LOG": "debug"
+    },
+    "terminal.integrated.fontSize": 14,
+    "terminal.integrated.fontFamily": "Fira Code",
+    
+    // === 파일 탐색기 ===
+    "files.exclude": {
+        "**/build/": true,
+        "**/target/": true,
+        "**/.git": true,
+        "**/node_modules": true,
+        "**/.movement": true
+    },
+    "search.exclude": {
+        "**/build": true,
+        "**/target": true,
+        "**/coverage": true
+    },
+    "files.watcherExclude": {
+        "**/build/**": true,
+        "**/target/**": true,
+        "**/.git/objects/**": true
+    },
+    
+    // === Git 설정 ===
+    "git.enableSmartCommit": true,
+    "git.autofetch": true,
+    "git.confirmSync": false,
+    "gitlens.codeLens.enabled": true,
+    "gitlens.currentLine.enabled": true,
+    
+    // === 디버깅 설정 ===
+    "debug.allowBreakpointsEverywhere": true,
+    "debug.showInlineBreakpointCandidates": true,
+    "debug.showSubSessionsInToolBar": true,
+    
+    // === 에러 표시 ===
+    "errorLens.enabledDiagnosticLevels": ["error", "warning", "info"],
+    "errorLens.fontSize": "12px",
+    "errorLens.fontStyleItalic": true,
+    
+    // === 성능 최적화 ===
+    "typescript.surveys.enabled": false,
+    "editor.minimap.enabled": false,
+    "editor.lightbulb.enabled": false,
+    "files.maxMemoryForLargeFilesMB": 4096,
+    
+    // === UI 커스터마이징 ===
+    "workbench.iconTheme": "material-icon-theme",
+    "workbench.colorTheme": "GitHub Dark",
+    "editor.fontFamily": "Fira Code, 'Courier New', monospace",
+    "editor.fontSize": 14,
+    "editor.fontLigatures": true,
+    "editor.lineHeight": 1.5,
+    
+    // === 코드 품질 ===
+    "editor.rulers": [80, 100],
+    "editor.renderWhitespace": "boundary",
+    "files.trimTrailingWhitespace": true,
+    "files.insertFinalNewline": true,
+    "files.trimFinalNewlines": true
+}
+```
+
+### 고급 tasks.json
+```json
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Movement: Full Build Pipeline",
+            "type": "shell",
+            "command": "${workspaceFolder}/scripts/full-build.sh",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "problemMatcher": [
+                {
+                    "owner": "movement",
+                    "fileLocation": "relative",
+                    "pattern": {
+                        "regexp": "^error\\[(.*)\\]: (.*)$",
+                        "severity": 1,
+                        "message": 2
+                    }
+                }
+            ],
+            "runOptions": {
+                "runOn": "folderOpen"
+            }
+        },
+        {
+            "label": "Movement: Watch & Test",
+            "type": "shell",
+            "command": "movement",
+            "args": ["move", "test", "--watch"],
+            "group": "test",
+            "isBackground": true,
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "dedicated"
+            },
+            "problemMatcher": {
+                "owner": "movement-test",
+                "fileLocation": "relative",
+                "pattern": {
+                    "regexp": "^(.*):(\\d+):(\\d+): (error|warning): (.*)$",
+                    "file": 1,
+                    "line": 2,
+                    "column": 3,
+                    "severity": 4,
+                    "message": 5
+                }
+            }
+        },
+        {
+            "label": "Movement: Format All",
+            "type": "shell",
+            "command": "find",
+            "args": [".", "-name", "*.move", "-exec", "movement", "move", "fmt", "{}", "+"],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "silent"
+            }
+        },
+        {
+            "label": "Movement: Deploy to Testnet",
+            "type": "shell",
+            "command": "movement",
+            "args": [
+                "move", "publish",
+                "--account-name", "${input:deployAccount}",
+                "--network", "testnet"
+            ],
+            "group": "build",
+            "dependsOn": "Movement: Full Build Pipeline",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": true,
+                "panel": "dedicated"
+            }
+        }
+    ],
+    "inputs": [
+        {
+            "id": "deployAccount",
+            "description": "배포할 계정 선택",
+            "type": "pickString",
+            "options": [
+                "dev-account",
+                "testnet-deployer",
+                "staging-account"
+            ]
+        }
+    ]
+}
+```
+
+### 고급 launch.json (디버깅)
+```json
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug Move Test",
+            "type": "lldb",
+            "request": "launch",
+            "program": "/usr/local/bin/movement",
+            "args": [
+                "move", "test",
+                "${input:testFilter}",
+                "--verbose"
+            ],
+            "cwd": "${workspaceFolder}",
+            "stopOnEntry": false,
+            "environment": [
+                {
+                    "name": "RUST_LOG",
+                    "value": "debug"
+                },
+                {
+                    "name": "RUST_BACKTRACE", 
+                    "value": "full"
+                }
+            ],
+            "console": "integratedTerminal",
+            "sourceLanguages": ["rust"],
+            "preLaunchTask": "Movement: Full Build Pipeline"
+        },
+        {
+            "name": "Profile Gas Usage",
+            "type": "node",
+            "request": "launch",
+            "program": "/usr/local/bin/movement",
+            "args": [
+                "move", "test",
+                "--gas-profile",
+                "--output-file", "gas-profile.json"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal"
+        },
+        {
+            "name": "Debug Smart Contract",
+            "type": "lldb",
+            "request": "attach",
+            "program": "/usr/local/bin/movement",
+            "waitFor": true,
+            "sourceLanguages": ["rust"]
+        }
+    ],
+    "inputs": [
+        {
+            "id": "testFilter",
+            "description": "테스트 필터 (함수명 또는 패턴)",
+            "type": "promptString",
+            "default": ""
+        }
+    ]
+}
+```
+
+## 🧠 2. IntelliJ IDEA 설정
+
+### Move 플러그인 설치
+```kotlin
+// build.gradle.kts (플러그인 개발용)
+plugins {
+    id("org.jetbrains.intellij") version "1.16.0"
+    kotlin("jvm") version "1.9.0"
+}
+
+repositories {
+    mavenCentral()
+}
+
+intellij {
+    version.set("2023.2.5")
+    type.set("IC") // Community Edition
+    
+    plugins.set(listOf(
+        "com.intellij.rust", // Rust 지원
+        "org.toml.lang"      // TOML 지원
+    ))
+}
+
+dependencies {
+    implementation("org.jetbrains.kotlin:kotlin-stdlib")
+}
+
+tasks.patchPluginXml {
+    sinceBuild.set("232")
+    untilBuild.set("242.*")
+}
+```
+
+### IntelliJ 설정 파일
+```xml
+<!-- .idea/movement.xml -->
+<application>
+  <component name="MovementSettings">
+    <option name="compilerPath" value="/usr/local/bin/movement" />
+    <option name="enableLinting" value="true" />
+    <option name="enableFormatting" value="true" />
+    <option name="autoSaveBeforeTest" value="true" />
+  </component>
+</application>
+```
+
+### 프로젝트 구성 (.idea/workspace.xml)
+```xml
+<project>
+  <component name="ChangeListManager">
+    <option name="EXCLUDED_CONVERTED_TO_GIT" value="true" />
+  </component>
+  
+  <component name="ProjectViewPane">
+    <subPane>
+      <expand>
+        <path>
+          <item name="movement-project" type="b2602c69:ProjectViewProjectNode" />
+          <item name="sources" type="462c0819:PsiDirectoryNode" />
+        </path>
+      </expand>
+    </subPane>
+  </component>
+  
+  <component name="RunManager">
+    <!-- Movement 테스트 실행 설정 -->
+    <configuration name="Movement Test All" type="CargoCommandRunConfiguration">
+      <option name="command" value="test --all" />
+      <option name="workingDirectory" value="$PROJECT_DIR$" />
+      <envs>
+        <env name="RUST_LOG" value="debug" />
+      </envs>
+    </configuration>
+    
+    <!-- Movement 빌드 설정 -->
+    <configuration name="Movement Build" type="CargoCommandRunConfiguration">
+      <option name="command" value="build --release" />
+      <option name="workingDirectory" value="$PROJECT_DIR$" />
+    </configuration>
+  </component>
+</project>
+```
+
+### 코드 스타일 설정
+```xml
+<!-- .idea/codeStyles/Project.xml -->
+<component name="ProjectCodeStyleConfiguration">
+  <code_scheme name="Project">
+    <option name="FORMATTER_TAGS_ENABLED" value="true" />
+    
+    <!-- Move 언어 설정 -->
+    <MoveCodeStyleSettings>
+      <option name="INDENT_SIZE" value="4" />
+      <option name="TAB_SIZE" value="4" />
+      <option name="USE_TAB_CHARACTER" value="false" />
+      <option name="SMART_TABS" value="false" />
+      <option name="RIGHT_MARGIN" value="100" />
+      <option name="WRAP_ON_TYPING" value="true" />
+      
+      <!-- 함수 정의 스타일 -->
+      <option name="SPACE_BEFORE_FUNCTION_PARENTHESES" value="false" />
+      <option name="SPACE_WITHIN_FUNCTION_PARENTHESES" value="false" />
+      <option name="SPACE_BEFORE_FUNCTION_LBRACE" value="true" />
+      
+      <!-- 블록 스타일 -->
+      <option name="BRACE_STYLE" value="End of line" />
+      <option name="CLASS_BRACE_STYLE" value="End of line" />
+      <option name="METHOD_BRACE_STYLE" value="End of line" />
+      
+      <!-- 임포트 설정 -->
+      <option name="BLANK_LINES_AFTER_IMPORTS" value="1" />
+      <option name="BLANK_LINES_BEFORE_IMPORTS" value="1" />
+    </MoveCodeStyleSettings>
+  </code_scheme>
+</component>
+```
+
+## 🔧 3. 고급 개발 워크플로우
+
+### VS Code 커스텀 명령어
+```json
+// .vscode/commands.json
+{
+    "commands": [
+        {
+            "command": "movement.buildAndTest",
+            "title": "Movement: Build & Test",
+            "category": "Movement"
+        },
+        {
+            "command": "movement.deployToTestnet", 
+            "title": "Movement: Deploy to Testnet",
+            "category": "Movement"
+        },
+        {
+            "command": "movement.formatCode",
+            "title": "Movement: Format Code",
+            "category": "Movement"
+        }
+    ]
+}
+```
+
+### 키보드 단축키 설정
+```json
+// keybindings.json
+[
+    {
+        "key": "ctrl+shift+b",
+        "command": "movement.buildAndTest",
+        "when": "resourceExtname == '.move'"
+    },
+    {
+        "key": "ctrl+shift+d",
+        "command": "movement.deployToTestnet", 
+        "when": "resourceExtname == '.move'"
+    },
+    {
+        "key": "ctrl+shift+f",
+        "command": "movement.formatCode",
+        "when": "resourceExtname == '.move'"
+    },
+    {
+        "key": "f5",
+        "command": "workbench.action.debug.start",
+        "when": "resourceExtname == '.move'"
+    }
+]
+```
+
+### 스니펫 모음
+```json
+// move.code-snippets
+{
+    "Complete Module Template": {
+        "prefix": "movemod",
+        "body": [
+            "module ${1:address}::${2:module_name} {",
+            "    use std::signer;",
+            "    use std::string::{Self, String};",
+            "    use std::error;",
+            "",
+            "    /// Error codes",
+            "    const E_${3:ERROR_NAME}: u64 = 1;",
+            "",
+            "    /// Main resource",
+            "    struct ${4:ResourceName} has key, store {",
+            "        ${5:field}: ${6:u64},",
+            "    }",
+            "",
+            "    /// Initialize resource",
+            "    public fun init_${4/(.*)/${1:/downcase}/}(account: &signer, ${5:field}: ${6:u64}) {",
+            "        move_to(account, ${4:ResourceName} { ${5:field} });",
+            "    }",
+            "",
+            "    /// Update resource",
+            "    public fun update_${5:field}(account: &signer, new_${5:field}: ${6:u64}) acquires ${4:ResourceName} {",
+            "        let resource = borrow_global_mut<${4:ResourceName}>(signer::address_of(account));",
+            "        resource.${5:field} = new_${5:field};",
+            "    }",
+            "",
+            "    /// View functions",
+            "    #[view]",
+            "    public fun get_${5:field}(addr: address): ${6:u64} acquires ${4:ResourceName} {",
+            "        borrow_global<${4:ResourceName}>(addr).${5:field}",
+            "    }",
+            "",
+            "    /// Tests",
+            "    #[test(account = @0x1)]",
+            "    public fun test_${2:module_name}(account: &signer) acquires ${4:ResourceName} {",
+            "        init_${4/(.*)/${1:/downcase}/}(account, ${7:100});",
+            "        assert!(get_${5:field}(signer::address_of(account)) == ${7:100}, E_${3:ERROR_NAME});",
+            "    }",
+            "}"
+        ],
+        "description": "완전한 Move 모듈 템플릿"
+    },
+    
+    "NFT Collection Template": {
+        "prefix": "nftcol",
+        "body": [
+            "struct ${1:CollectionName} has key, store {",
+            "    tokens: vector<${2:TokenName}>,",
+            "    name: String,",
+            "    description: String,",
+            "    max_supply: u64,",
+            "}",
+            "",
+            "struct ${2:TokenName} has store {",
+            "    id: u64,",
+            "    name: String,",
+            "    description: String,",
+            "    image_url: String,",
+            "    properties: vector<Property>,",
+            "}",
+            "",
+            "struct Property has store, copy, drop {",
+            "    key: String,",
+            "    value: String,",
+            "}",
+            "",
+            "public fun create_collection(",
+            "    creator: &signer,",
+            "    name: String,",
+            "    description: String,",
+            "    max_supply: u64",
+            ") {",
+            "    move_to(creator, ${1:CollectionName} {",
+            "        tokens: vector::empty(),",
+            "        name,",
+            "        description,",
+            "        max_supply,",
+            "    });",
+            "}"
+        ],
+        "description": "NFT 컬렉션 템플릿"
+    }
+}
+```
+
+## 🎨 4. UI/UX 최적화
+
+### VS Code 워크스페이스 설정
+```json
+// my-dapp.code-workspace
+{
+    "folders": [
+        {
+            "name": "🏗️ Smart Contracts",
+            "path": "./contracts"
+        },
+        {
+            "name": "🧪 Tests", 
+            "path": "./tests"
+        },
+        {
+            "name": "📚 Documentation",
+            "path": "./docs"
+        },
+        {
+            "name": "🚀 Deployment",
+            "path": "./deployment"
+        }
+    ],
+    "settings": {
+        "move.compiler.path": "/usr/local/bin/movement",
+        "files.associations": {
+            "*.move": "move"
+        },
+        "search.exclude": {
+            "**/build": true,
+            "**/target": true
+        }
+    },
+    "extensions": {
+        "recommendations": [
+            "PontemNetwork.move-language",
+            "rust-lang.rust-analyzer",
+            "eamodio.gitlens"
+        ]
+    },
+    "tasks": {
+        "version": "2.0.0",
+        "tasks": [
+            {
+                "label": "🏗️ Build All Contracts",
+                "type": "shell",
+                "command": "movement",
+                "args": ["move", "build", "--workspace"]
+            }
+        ]
+    }
+}
+```
+
+### 색상 테마 커스터마이징
+```json
+// settings.json의 색상 설정
+{
+    "workbench.colorCustomizations": {
+        "[GitHub Dark]": {
+            // Move 키워드 색상
+            "editor.tokenColorCustomizations": {
+                "textMateRules": [
+                    {
+                        "scope": "keyword.control.move",
+                        "settings": {
+                            "foreground": "#FF6B6B",
+                            "fontStyle": "bold"
+                        }
+                    },
+                    {
+                        "scope": "storage.type.move",
+                        "settings": {
+                            "foreground": "#4ECDC4"
+                        }
+                    },
+                    {
+                        "scope": "entity.name.function.move",
+                        "settings": {
+                            "foreground": "#45B7D1"
+                        }
+                    },
+                    {
+                        "scope": "support.type.move",
+                        "settings": {
+                            "foreground": "#96CEB4"
+                        }
+                    }
+                ]
+            }
+        }
+    }
+}
+```
+
+## 🤝 5. 팀 협업 설정
+
+### 공유 개발 설정
+```bash
+#!/bin/bash
+# setup-team-environment.sh
+
+echo "=== 팀 개발 환경 설정 ==="
+
+# 1. 공통 VS Code 설정 복사
+cp .vscode-team/* .vscode/
+
+# 2. Git hooks 설정
+cp hooks/* .git/hooks/
+chmod +x .git/hooks/*
+
+# 3. 공통 의존성 설치  
+if command -v code &> /dev/null; then
+    echo "VS Code 확장 설치 중..."
+    while IFS= read -r extension; do
+        code --install-extension "$extension"
+    done < .vscode/extensions.list
+fi
+
+# 4. 개발 도구 확인
+echo "개발 도구 확인 중..."
+movement --version || echo "⚠️ Movement CLI 설치 필요"
+rustc --version || echo "⚠️ Rust 설치 필요"
+
+echo "팀 환경 설정 완료! 🎉"
+```
+
+### Git Hooks 예시
+```bash
+#!/bin/bash
+# .git/hooks/pre-commit
+
+echo "=== Movement 코드 품질 검사 ==="
+
+# 1. 코드 포맷팅 검사
+if ! movement move fmt --check; then
+    echo "❌ 코드 포맷팅이 필요합니다. 다음 명령어를 실행하세요:"
+    echo "movement move fmt"
+    exit 1
+fi
+
+# 2. 린팅 검사
+if ! movement move check; then
+    echo "❌ 린팅 오류가 있습니다."
+    exit 1
+fi
+
+# 3. 테스트 실행
+if ! movement move test; then
+    echo "❌ 테스트가 실패했습니다."
+    exit 1
+fi
+
+echo "✅ 모든 검사를 통과했습니다!"
+```
+
+## 📊 6. 성능 모니터링
+
+### IDE 성능 최적화
+```json
+// settings.json 성능 설정
+{
+    // 메모리 사용량 최적화
+    "files.maxMemoryForLargeFilesMB": 4096,
+    "typescript.preferences.maxTsServerMemory": 4096,
+    "editor.largeFileOptimizations": true,
+    
+    // 파일 감시자 최적화
+    "files.watcherExclude": {
+        "**/build/**": true,
+        "**/target/**": true,
+        "**/.git/objects/**": true,
+        "**/node_modules/**": true
+    },
+    
+    // 검색 최적화
+    "search.followSymlinks": false,
+    "search.smartCase": true,
+    
+    // 에디터 최적화
+    "editor.minimap.enabled": false,
+    "editor.lightbulb.enabled": false,
+    "breadcrumbs.enabled": true
+}
+```
+
+## 🔗 다음 단계
+
+IDE 환경을 완벽히 구성했다면:
+
+**[디버깅 & 모니터링 →](/developer-tools/debugging-tools)**
+
+## 📚 참고 자료
+
+- [Movement 개발자 포털](https://developer.movementnetwork.xyz/)
+- [Movement 공식 문서](https://docs.movementnetwork.xyz/)
+- [VS Code 공식 문서](https://code.visualstudio.com/docs)
+- [IntelliJ IDEA 플러그인 개발](https://plugins.jetbrains.com/docs/intellij/)
+
+---
+
+*완벽한 IDE 환경으로 개발 생산성을 극대화하세요! 💻🚀*

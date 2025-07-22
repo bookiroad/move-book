@@ -1,0 +1,9 @@
+{
+  "index": "개요",
+  "data-types": "📐 데이터 타입",
+  "modules-resources": "🏗️ 모듈과 리소스",  
+  "control-structures": "🔄 제어 구조",
+  "constants-errors": "⚠️ 상수와 에러 처리",
+  "generics-phantom": "🔧 제네릭과 팬텀 타입",
+  "unit-testing": "🧪 단위 테스트"
+}

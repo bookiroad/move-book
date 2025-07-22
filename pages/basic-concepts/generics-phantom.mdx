@@ -1,0 +1,437 @@
+# 🔧 제네릭과 팬텀 타입 (Generics & Phantom Types)
+
+재사용 가능하고 타입 안전한 코드를 작성하기 위한 Move의 고급 타입 시스템을 학습합니다. 제네릭과 팬텀 타입은 코드의 유연성과 안전성을 동시에 제공합니다.
+
+## 🎯 제네릭 (Generics)
+
+제네릭을 사용하면 다양한 타입에서 동작하는 함수와 구조체를 만들 수 있습니다.
+
+### 제네릭 함수
+```move
+module movement::generic_functions {
+    // 기본 제네릭 함수
+    public fun identity<T: drop>(value: T): T {
+        value
+    }
+    
+    // 제네릭 교환 함수
+    public fun swap<T: drop>(x: T, y: T): (T, T) {
+        (y, x)
+    }
+    
+    // 벡터 작업 함수
+    public fun get_first<T: copy>(items: &vector<T>): T {
+        *vector::borrow(items, 0)
+    }
+    
+    // 사용 예시
+    fun example_usage() {
+        let num = identity<u64>(42);
+        let text = identity<vector<u8>>(b"hello");
+        
+        let (a, b) = swap<u64>(1, 2); // (2, 1)
+        let (x, y) = swap<bool>(true, false); // (false, true)
+    }
+}
+```
+
+### 제네릭 구조체
+```move
+module movement::generic_structs {
+    // 제네릭 래퍼 구조체
+    struct Wrapper<T> has copy, drop, store {
+        value: T
+    }
+    
+    // 제네릭 페어 구조체
+    struct Pair<T, U> has copy, drop, store {
+        first: T,
+        second: U,
+    }
+    
+    // 제네릭 컨테이너
+    struct Container<T: store> has key, store {
+        items: vector<T>,
+        count: u64,
+    }
+    
+    // 생성자 함수들
+    public fun make_wrapper<T: copy + drop>(value: T): Wrapper<T> {
+        Wrapper { value }
+    }
+    
+    public fun make_pair<T: copy + drop, U: copy + drop>(
+        first: T, 
+        second: U
+    ): Pair<T, U> {
+        Pair { first, second }
+    }
+    
+    // 사용 예시
+    fun examples() {
+        let num_wrapper = make_wrapper<u64>(100);
+        let text_wrapper = make_wrapper<vector<u8>>(b"Movement");
+        
+        let mixed_pair = make_pair<u64, bool>(42, true);
+        let string_pair = make_pair<vector<u8>, vector<u8>>(b"hello", b"world");
+    }
+}
+```
+
+## 🎭 타입 제약 (Type Constraints)
+
+제네릭 타입에 abilities를 요구하여 안전성을 보장합니다.
+
+### Abilities 제약
+```move
+module movement::type_constraints {
+    // copy 제약 - 값을 복사할 수 있어야 함
+    public fun duplicate<T: copy>(value: &T): T {
+        *value
+    }
+    
+    // drop 제약 - 값을 삭제할 수 있어야 함
+    public fun consume<T: drop>(value: T) {
+        // value는 자동으로 drop됨
+    }
+    
+    // store 제약 - 다른 구조체에 저장 가능해야 함
+    struct StorableContainer<T: store> has store {
+        data: T
+    }
+    
+    // 여러 제약 조합
+    public fun safe_operation<T: copy + drop + store>(value: T): T {
+        let copied = value; // copy
+        copied // 원본은 drop, 복사본 반환
+    }
+}
+```
+
+### 실전 제약 예제
+```move
+module movement::practical_constraints {
+    use std::string::String;
+    
+    // 토큰 타입에 대한 제네릭 지갑
+    struct Wallet<CoinType: store> has key {
+        balance: u64,
+        metadata: String,
+    }
+    
+    // 교환 가능한 아이템들
+    struct Tradeable<T: store + copy> has store {
+        item: T,
+        price: u64,
+        seller: address,
+    }
+    
+    // 안전한 전송 함수
+    public fun safe_transfer<T: key + store>(
+        account: &signer,
+        resource: T
+    ) {
+        move_to(account, resource);
+    }
+}
+```
+
+## 👻 팬텀 타입 (Phantom Types)
+
+팬텀 타입은 런타임에는 존재하지 않지만 컴파일 타임에 타입 안전성을 제공합니다.
+
+### 기본 팬텀 타입
+```move
+module movement::phantom_types {
+    // 팬텀 타입 마커
+    struct USD {}
+    struct KRW {}
+    struct BTC {}
+    
+    // 팬텀 타입을 사용한 금액 구조체
+    struct Money<phantom Currency> has copy, drop, store {
+        amount: u64,
+    }
+    
+    // 각 통화별 타입 안전한 함수들
+    public fun create_usd(amount: u64): Money<USD> {
+        Money { amount }
+    }
+    
+    public fun create_krw(amount: u64): Money<KRW> {
+        Money { amount }
+    }
+    
+    public fun create_btc(amount: u64): Money<BTC> {
+        Money { amount }
+    }
+    
+    // 같은 통화끼리만 연산 가능
+    public fun add_money<Currency>(
+        a: Money<Currency>, 
+        b: Money<Currency>
+    ): Money<Currency> {
+        Money { amount: a.amount + b.amount }
+    }
+    
+    // 환전 함수 (명시적 변환)
+    public fun exchange_usd_to_krw(usd: Money<USD>, rate: u64): Money<KRW> {
+        Money { amount: usd.amount * rate }
+    }
+}
+```
+
+### 실전 팬텀 타입: 토큰 시스템
+```move
+module movement::token_system {
+    // 토큰 타입 마커들
+    struct MovementToken {}
+    struct StableCoin {}
+    struct RewardToken {}
+    
+    // 팬텀 타입 토큰 구조체
+    struct Token<phantom TokenType> has store {
+        amount: u64,
+    }
+    
+    // 계정별 잔액
+    struct Balance<phantom TokenType> has key {
+        value: u64,
+    }
+    
+    // 토큰별 메타데이터
+    struct TokenInfo<phantom TokenType> has key {
+        name: vector<u8>,
+        symbol: vector<u8>,
+        decimals: u8,
+        total_supply: u64,
+    }
+    
+    // 타입 안전한 민팅
+    public fun mint<TokenType>(amount: u64): Token<TokenType> {
+        Token { amount }
+    }
+    
+    // 같은 타입끼리만 합산 가능
+    public fun merge<TokenType>(
+        token1: Token<TokenType>, 
+        token2: Token<TokenType>
+    ): Token<TokenType> {
+        Token { amount: token1.amount + token2.amount }
+    }
+    
+    // 전송 함수 - 타입 안전성 보장
+    public fun transfer<TokenType>(
+        from: &signer,
+        to: address,
+        amount: u64,
+    ) acquires Balance {
+        let from_addr = signer::address_of(from);
+        
+        // 잔액 확인 및 차감
+        let from_balance = borrow_global_mut<Balance<TokenType>>(from_addr);
+        assert!(from_balance.value >= amount, 1);
+        from_balance.value = from_balance.value - amount;
+        
+        // 수신자 잔액 증가
+        if (!exists<Balance<TokenType>>(to)) {
+            move_to(from, Balance<TokenType> { value: 0 });
+        };
+        
+        let to_balance = borrow_global_mut<Balance<TokenType>>(to);
+        to_balance.value = to_balance.value + amount;
+    }
+}
+```
+
+## 🏪 실전 예제: DEX (탈중앙화 거래소)
+
+```move
+module movement::dex_generics {
+    use std::signer;
+    
+    // 토큰 타입 마커들
+    struct TokenA {}
+    struct TokenB {}
+    
+    // 유동성 풀 (두 토큰 타입을 팬텀으로 사용)
+    struct LiquidityPool<phantom X, phantom Y> has key {
+        reserve_x: u64,
+        reserve_y: u64,
+        total_supply: u64,
+    }
+    
+    // LP 토큰
+    struct LPToken<phantom X, phantom Y> has store {
+        amount: u64,
+    }
+    
+    // 풀 초기화
+    public fun initialize_pool<X, Y>(
+        account: &signer,
+        initial_x: u64,
+        initial_y: u64,
+    ) {
+        let pool = LiquidityPool<X, Y> {
+            reserve_x: initial_x,
+            reserve_y: initial_y,
+            total_supply: initial_x * initial_y, // 간단한 공식
+        };
+        
+        move_to(account, pool);
+    }
+    
+    // 유동성 추가 (제네릭 + 팬텀)
+    public fun add_liquidity<X, Y>(
+        pool_addr: address,
+        amount_x: u64,
+        amount_y: u64,
+    ): LPToken<X, Y> acquires LiquidityPool {
+        let pool = borrow_global_mut<LiquidityPool<X, Y>>(pool_addr);
+        
+        // 비율 계산 로직 (간소화)
+        let lp_amount = (amount_x * amount_y) / 1000;
+        
+        pool.reserve_x = pool.reserve_x + amount_x;
+        pool.reserve_y = pool.reserve_y + amount_y;
+        pool.total_supply = pool.total_supply + lp_amount;
+        
+        LPToken { amount: lp_amount }
+    }
+    
+    // 스왑 함수 (X 토큰을 Y 토큰으로)
+    public fun swap_x_to_y<X, Y>(
+        pool_addr: address,
+        input_amount: u64,
+    ): u64 acquires LiquidityPool {
+        let pool = borrow_global_mut<LiquidityPool<X, Y>>(pool_addr);
+        
+        // AMM 공식: x * y = k
+        let output_amount = (input_amount * pool.reserve_y) / 
+                           (pool.reserve_x + input_amount);
+        
+        pool.reserve_x = pool.reserve_x + input_amount;
+        pool.reserve_y = pool.reserve_y - output_amount;
+        
+        output_amount
+    }
+}
+```
+
+## 🎮 실전 예제: 게임 아이템 시스템
+
+```move
+module movement::game_items {
+    // 아이템 타입 마커들
+    struct Sword {}
+    struct Shield {}
+    struct Potion {}
+    
+    // 등급 마커들
+    struct Common {}
+    struct Rare {}
+    struct Epic {}
+    struct Legendary {}
+    
+    // 제네릭 아이템 구조체
+    struct Item<phantom ItemType, phantom Rarity> has store, drop {
+        power: u64,
+        durability: u64,
+        metadata: vector<u8>,
+    }
+    
+    // 인벤토리
+    struct Inventory has key {
+        swords: vector<Item<Sword, Common>>,
+        rare_swords: vector<Item<Sword, Rare>>,
+        shields: vector<Item<Shield, Common>>,
+        potions: vector<Item<Potion, Common>>,
+    }
+    
+    // 타입별 아이템 생성
+    public fun create_common_sword(power: u64): Item<Sword, Common> {
+        Item {
+            power,
+            durability: 100,
+            metadata: b"Common Iron Sword",
+        }
+    }
+    
+    public fun create_legendary_sword(power: u64): Item<Sword, Legendary> {
+        Item {
+            power,
+            durability: 1000,
+            metadata: b"Legendary Excalibur",
+        }
+    }
+    
+    // 강화 시스템 (같은 타입만 강화 가능)
+    public fun upgrade_item<ItemType, CurrentRarity, NextRarity>(
+        item: Item<ItemType, CurrentRarity>,
+        upgrade_material: Item<ItemType, CurrentRarity>,
+    ): Item<ItemType, NextRarity> {
+        Item {
+            power: item.power + upgrade_material.power / 2,
+            durability: item.durability,
+            metadata: item.metadata,
+        }
+    }
+}
+```
+
+## 💡 모범 사례
+
+### 1. 의미 있는 제네릭 이름
+```move
+// ✅ 좋은 예
+struct Pool<TokenA, TokenB> has store {
+    reserve_a: u64,
+    reserve_b: u64,
+}
+
+// ❌ 피해야 할 예
+struct Pool<T, U> has store {
+    reserve_1: u64,
+    reserve_2: u64,
+}
+```
+
+### 2. 적절한 제약 사용
+```move
+// ✅ 필요한 제약만 추가
+public fun safe_store<T: store>(value: T) {
+    // store ability만 필요
+}
+
+// ❌ 불필요한 제약
+public fun safe_store<T: copy + drop + store + key>(value: T) {
+    // 과도한 제약
+}
+```
+
+### 3. 팬텀 타입 활용
+```move
+// ✅ 타입 안전성을 위한 팬텀 타입
+struct Currency<phantom CoinType> has store {
+    amount: u64
+}
+
+// 컴파일 타임에 잘못된 연산 방지
+// Currency<USD> + Currency<KRW> = 컴파일 에러!
+```
+
+## 🔗 다음 단계
+
+제네릭과 팬텀 타입을 이해했다면:
+- [단위 테스트](/basic-concepts/unit-testing) - 코드 품질 보장
+- [고급 개념](/advanced-concepts) - Smart Vector, Smart Table
+
+## 📚 참고 자료
+
+- [Movement 개발자 포털](https://developer.movementnetwork.xyz/)
+- [Movement 공식 문서](https://docs.movementnetwork.xyz/)
+- [상수와 에러 처리](/basic-concepts/constants-errors)
+
+---
+
+*제네릭과 팬텀 타입으로 안전하고 재사용 가능한 코드를 만들어보세요! 🎯*

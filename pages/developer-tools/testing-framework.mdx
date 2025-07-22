@@ -1,0 +1,728 @@
+# 🧪 테스트 프레임워크
+
+Movement 개발에서 포괄적이고 효과적인 테스트 전략을 구축하는 방법을 알아보겠습니다. 단위 테스트부터 E2E 테스트까지 모든 레벨의 테스트를 다룹니다.
+
+## 🎯 학습 목표
+
+이 섹션을 완료하면:
+- 완전한 테스트 스위트를 구축할 수 있습니다
+- TDD(테스트 주도 개발) 방식으로 Move 코드를 작성할 수 있습니다
+- 테스트 자동화와 CI/CD 파이프라인을 구성할 수 있습니다
+- 테스트 커버리지를 측정하고 개선할 수 있습니다
+
+## 📊 테스트 피라미드
+
+```
+        🔺 E2E Tests (Few)
+       ────────────────────
+      🔺🔺 Integration Tests (Some)  
+     ──────────────────────────────
+    🔺🔺🔺 Unit Tests (Many)
+   ────────────────────────────────────
+```
+
+| 테스트 타입 | 수량 | 속도 | 비용 | 신뢰성 |
+|-------------|------|------|------|--------|
+| **Unit Tests** | 많음 | ⚡⚡⚡⚡⚡ | 💰 | ⭐⭐⭐ |
+| **Integration Tests** | 적당 | ⚡⚡⚡ | 💰💰 | ⭐⭐⭐⭐ |
+| **E2E Tests** | 적음 | ⚡⚡ | 💰💰💰 | ⭐⭐⭐⭐⭐ |
+
+## 🏗️ 1. 단위 테스트 (Unit Tests)
+
+### 기본 단위 테스트 구조
+```move
+module movement::calculator {
+    public fun add(a: u64, b: u64): u64 {
+        a + b
+    }
+    
+    public fun divide(a: u64, b: u64): u64 {
+        assert!(b != 0, 1);
+        a / b
+    }
+    
+    public fun power(base: u64, exponent: u64): u64 {
+        if (exponent == 0) {
+            1
+        } else if (exponent == 1) {
+            base
+        } else {
+            base * power(base, exponent - 1)
+        }
+    }
+    
+    // === 단위 테스트 ===
+    
+    #[test]
+    fun test_add_simple() {
+        assert!(add(2, 3) == 5, 1);
+        assert!(add(0, 0) == 0, 2);
+        assert!(add(100, 200) == 300, 3);
+    }
+    
+    #[test]
+    fun test_add_edge_cases() {
+        // 최대값 테스트
+        let max_u64 = 18446744073709551615;
+        assert!(add(max_u64, 0) == max_u64, 1);
+        
+        // 큰 수 테스트
+        assert!(add(1000000, 2000000) == 3000000, 2);
+    }
+    
+    #[test] 
+    fun test_divide_normal() {
+        assert!(divide(10, 2) == 5, 1);
+        assert!(divide(100, 10) == 10, 2);
+        assert!(divide(1, 1) == 1, 3);
+    }
+    
+    #[test]
+    #[expected_failure(abort_code = 1)]
+    fun test_divide_by_zero() {
+        divide(10, 0);
+    }
+    
+    #[test]
+    fun test_power_cases() {
+        assert!(power(2, 0) == 1, 1); // 지수가 0
+        assert!(power(2, 1) == 2, 2); // 지수가 1
+        assert!(power(2, 3) == 8, 3); // 일반적인 경우
+        assert!(power(10, 2) == 100, 4);
+    }
+    
+    // 성능 테스트
+    #[test]
+    fun test_power_performance() {
+        // 큰 지수에서도 합리적인 시간 내에 실행되는지 확인
+        let result = power(2, 10);
+        assert!(result == 1024, 1);
+    }
+}
+```
+
+### 고급 테스트 패턴
+```move
+module movement::advanced_testing {
+    use std::vector;
+    use std::string::{Self, String};
+    use std::signer;
+    
+    // 테스트 헬퍼 함수들
+    #[test_only]
+    fun create_test_string(content: vector<u8>): String {
+        string::utf8(content)
+    }
+    
+    #[test_only] 
+    fun assert_vector_equal<T: drop>(actual: &vector<T>, expected: &vector<T>) {
+        assert!(vector::length(actual) == vector::length(expected), 1);
+        let len = vector::length(actual);
+        let i = 0;
+        while (i < len) {
+            // Note: 실제로는 T가 PartialEq를 구현해야 함
+            i = i + 1;
+        }
+    }
+    
+    // 데이터 기반 테스트
+    #[test]
+    fun test_string_operations_data_driven() {
+        // 테스트 케이스 데이터
+        let test_cases = vector[
+            (b"hello", 5),
+            (b"world", 5), 
+            (b"", 0),
+            (b"movement", 8),
+        ];
+        
+        let i = 0;
+        while (i < vector::length(&test_cases)) {
+            let (input, expected_len) = *vector::borrow(&test_cases, i);
+            let test_string = create_test_string(input);
+            assert!(string::length(&test_string) == expected_len, i);
+            i = i + 1;
+        }
+    }
+    
+    // Mock 객체를 활용한 테스트
+    struct MockDatabase has store, drop {
+        data: vector<String>,
+    }
+    
+    #[test_only]
+    fun create_mock_db(): MockDatabase {
+        MockDatabase {
+            data: vector[
+                create_test_string(b"user1"),
+                create_test_string(b"user2"),
+            ]
+        }
+    }
+    
+    #[test]
+    fun test_with_mock_database() {
+        let mock_db = create_mock_db();
+        assert!(vector::length(&mock_db.data) == 2, 1);
+        
+        let first_user = vector::borrow(&mock_db.data, 0);
+        assert!(*first_user == create_test_string(b"user1"), 2);
+    }
+}
+```
+
+### 파라미터화된 테스트
+```move
+module movement::parameterized_tests {
+    // 테스트 매크로 시뮬레이션
+    #[test]
+    fun test_math_operations_parameterized() {
+        // Addition tests
+        test_addition_case(0, 0, 0);
+        test_addition_case(1, 2, 3);
+        test_addition_case(100, 200, 300);
+        test_addition_case(999, 1, 1000);
+        
+        // Multiplication tests  
+        test_multiplication_case(0, 5, 0);
+        test_multiplication_case(1, 10, 10);
+        test_multiplication_case(3, 4, 12);
+        test_multiplication_case(7, 8, 56);
+    }
+    
+    fun test_addition_case(a: u64, b: u64, expected: u64) {
+        assert!(a + b == expected, 1);
+    }
+    
+    fun test_multiplication_case(a: u64, b: u64, expected: u64) {
+        assert!(a * b == expected, 1);
+    }
+    
+    // 경계값 테스트
+    #[test]
+    fun test_boundary_values() {
+        // u64 경계값들
+        let max_u64 = 18446744073709551615;
+        let min_u64 = 0;
+        
+        assert!(min_u64 + 1 == 1, 1);
+        assert!(max_u64 - 1 == 18446744073709551614, 2);
+        
+        // 일반적인 경계값들
+        test_boundary_case(0);    // 최소값
+        test_boundary_case(1);    // 최소값 + 1
+        test_boundary_case(255);  // u8 최대값
+        test_boundary_case(256);  // u8 최대값 + 1
+    }
+    
+    fun test_boundary_case(value: u64) {
+        // 각 경계값에서의 동작 확인
+        assert!(value >= 0, 1);
+        if (value <= 255) {
+            let as_u8 = (value as u8);
+            assert!((as_u8 as u64) == value, 2);
+        }
+    }
+}
+```
+
+## 🔗 2. 통합 테스트 (Integration Tests)
+
+### 모듈 간 상호작용 테스트
+```move
+// tests/integration_tests.move
+#[test_only]
+module movement::integration_tests {
+    use movement::token;
+    use movement::nft;
+    use movement::marketplace;
+    use std::signer;
+    use std::account;
+    
+    // 통합 테스트용 계정 생성
+    #[test_only]
+    fun setup_test_accounts(): (signer, signer, signer) {
+        let admin = account::create_account_for_test(@0xADMIN);
+        let seller = account::create_account_for_test(@0xSELLER);
+        let buyer = account::create_account_for_test(@0xBUYER);
+        (admin, seller, buyer)
+    }
+    
+    // NFT 마켓플레이스 전체 워크플로우 테스트
+    #[test]
+    fun test_nft_marketplace_full_workflow() acquires TokenStore, NFTCollection, Marketplace {
+        let (admin, seller, buyer) = setup_test_accounts();
+        
+        // 1. 토큰 시스템 초기화
+        token::initialize(&admin);
+        token::mint(&admin, signer::address_of(&seller), 1000);
+        token::mint(&admin, signer::address_of(&buyer), 1000);
+        
+        // 2. NFT 컬렉션 생성
+        nft::create_collection(&seller, string::utf8(b"Test Collection"));
+        let token_id = nft::mint_nft(
+            &seller,
+            string::utf8(b"Test NFT"),
+            string::utf8(b"Description"), 
+            string::utf8(b"https://example.com/image.png")
+        );
+        
+        // 3. 마켓플레이스에 NFT 등록
+        marketplace::initialize(&admin);
+        marketplace::list_nft(&seller, token_id, 500);
+        
+        // 4. NFT 구매
+        marketplace::buy_nft(&buyer, signer::address_of(&seller), token_id);
+        
+        // 5. 결과 검증
+        assert!(nft::get_owner(token_id) == signer::address_of(&buyer), 1);
+        assert!(token::get_balance(signer::address_of(&seller)) == 1500, 2); // 1000 + 500
+        assert!(token::get_balance(signer::address_of(&buyer)) == 500, 3);   // 1000 - 500
+    }
+    
+    // 에러 시나리오 통합 테스트
+    #[test]
+    #[expected_failure(abort_code = 100)] // 잔액 부족 에러
+    fun test_insufficient_balance_scenario() acquires TokenStore, Marketplace {
+        let (admin, seller, buyer) = setup_test_accounts();
+        
+        token::initialize(&admin);
+        token::mint(&admin, signer::address_of(&buyer), 100); // 적은 잔액
+        
+        marketplace::initialize(&admin);  
+        marketplace::list_nft(&seller, 1, 500); // 비싼 NFT
+        
+        // 잔액 부족으로 구매 실패해야 함
+        marketplace::buy_nft(&buyer, signer::address_of(&seller), 1);
+    }
+    
+    // 동시성 테스트 시뮬레이션
+    #[test]
+    fun test_concurrent_operations() acquires TokenStore {
+        let (admin, user1, user2) = setup_test_accounts();
+        
+        token::initialize(&admin);
+        token::mint(&admin, signer::address_of(&user1), 1000);
+        token::mint(&admin, signer::address_of(&user2), 1000);
+        
+        // 동시에 같은 계정으로 전송 (순차적으로 실행됨)
+        token::transfer(&user1, signer::address_of(&user2), 100);
+        token::transfer(&user1, signer::address_of(&user2), 200);
+        
+        // 최종 상태 확인
+        assert!(token::get_balance(signer::address_of(&user1)) == 700, 1);
+        assert!(token::get_balance(signer::address_of(&user2)) == 1300, 2);
+    }
+}
+```
+
+### 상태 전환 테스트
+```move
+#[test_only]
+module movement::state_machine_tests {
+    // 상태 기반 테스트를 위한 게임 예제
+    use movement::game;
+    use std::signer;
+    
+    #[test]
+    fun test_game_state_transitions() acquires GameState {
+        let player = account::create_account_for_test(@0xPLAYER);
+        
+        // 초기 상태: NotStarted
+        game::create_game(&player);
+        assert!(game::get_state(signer::address_of(&player)) == game::NOT_STARTED, 1);
+        
+        // 전환: NotStarted -> Playing
+        game::start_game(&player);
+        assert!(game::get_state(signer::address_of(&player)) == game::PLAYING, 2);
+        
+        // 전환: Playing -> Paused
+        game::pause_game(&player);
+        assert!(game::get_state(signer::address_of(&player)) == game::PAUSED, 3);
+        
+        // 전환: Paused -> Playing
+        game::resume_game(&player);
+        assert!(game::get_state(signer::address_of(&player)) == game::PLAYING, 4);
+        
+        // 전환: Playing -> Finished
+        game::finish_game(&player);
+        assert!(game::get_state(signer::address_of(&player)) == game::FINISHED, 5);
+    }
+    
+    // 불법적인 상태 전환 테스트
+    #[test]
+    #[expected_failure(abort_code = 200)] // 잘못된 상태 전환
+    fun test_invalid_state_transition() acquires GameState {
+        let player = account::create_account_for_test(@0xPLAYER);
+        
+        game::create_game(&player);
+        // NotStarted 상태에서 바로 pause 시도 (불가능해야 함)
+        game::pause_game(&player);
+    }
+}
+```
+
+## 🌐 3. 엔드투엔드 테스트 (E2E Tests)
+
+### TypeScript E2E 테스트 프레임워크
+```typescript
+// tests/e2e/movementE2E.test.ts
+import { MovementClient, AptosAccount } from '@movementlabs/movement-sdk';
+import { expect } from '@jest/globals';
+
+describe('Movement E2E Tests', () => {
+    let client: MovementClient;
+    let admin: AptosAccount;
+    let user1: AptosAccount;
+    let user2: AptosAccount;
+    
+    beforeAll(async () => {
+        // Movement 테스트넷 클라이언트 설정
+        client = new MovementClient({
+            nodeUrl: 'https://testnet.bardock.movementnetwork.xyz/v1',
+            faucetUrl: 'https://faucet.movementnetwork.xyz/'
+        });
+        
+        // 테스트 계정들 생성
+        admin = new AptosAccount();
+        user1 = new AptosAccount();
+        user2 = new AptosAccount();
+        
+        // Faucet에서 토큰 받기
+        await client.fundAccount(admin.address(), 100000000);
+        await client.fundAccount(user1.address(), 100000000);
+        await client.fundAccount(user2.address(), 100000000);
+        
+        // 배포된 계약 대기
+        await waitForDeployment();
+    });
+    
+    describe('Token Operations', () => {
+        it('should initialize token system', async () => {
+            const payload = {
+                type: "entry_function_payload",
+                function: `${CONTRACT_ADDRESS}::token::initialize`,
+                type_arguments: [],
+                arguments: []
+            };
+            
+            const txn = await client.generateTransaction(admin.address(), payload);
+            const signedTxn = await client.signTransaction(admin, txn);
+            const result = await client.submitTransaction(signedTxn);
+            
+            await client.waitForTransaction(result.hash);
+            expect(result.success).toBe(true);
+        });
+        
+        it('should mint tokens', async () => {
+            const payload = {
+                type: "entry_function_payload", 
+                function: `${CONTRACT_ADDRESS}::token::mint`,
+                type_arguments: [],
+                arguments: [user1.address().hex(), "1000"]
+            };
+            
+            const txn = await client.generateTransaction(admin.address(), payload);
+            const signedTxn = await client.signTransaction(admin, txn);
+            const result = await client.submitTransaction(signedTxn);
+            
+            await client.waitForTransaction(result.hash);
+            
+            // 잔액 확인
+            const balance = await getTokenBalance(user1.address().hex());
+            expect(balance).toBe(1000);
+        });
+        
+        it('should transfer tokens', async () => {
+            // user1 -> user2로 500 토큰 전송
+            const payload = {
+                type: "entry_function_payload",
+                function: `${CONTRACT_ADDRESS}::token::transfer`,
+                type_arguments: [],
+                arguments: [user2.address().hex(), "500"]
+            };
+            
+            const txn = await client.generateTransaction(user1.address(), payload);
+            const signedTxn = await client.signTransaction(user1, txn);
+            const result = await client.submitTransaction(signedTxn);
+            
+            await client.waitForTransaction(result.hash);
+            
+            // 잔액 확인
+            const user1Balance = await getTokenBalance(user1.address().hex());
+            const user2Balance = await getTokenBalance(user2.address().hex());
+            
+            expect(user1Balance).toBe(500);
+            expect(user2Balance).toBe(500);
+        });
+    });
+    
+    describe('NFT Marketplace', () => {
+        let nftId: number;
+        
+        it('should create NFT collection', async () => {
+            const payload = {
+                type: "entry_function_payload",
+                function: `${CONTRACT_ADDRESS}::nft::create_collection`,
+                type_arguments: [],
+                arguments: ["Test Collection", "1000"]
+            };
+            
+            const txn = await client.generateTransaction(user1.address(), payload);
+            const signedTxn = await client.signTransaction(user1, txn);
+            const result = await client.submitTransaction(signedTxn);
+            
+            await client.waitForTransaction(result.hash);
+            expect(result.success).toBe(true);
+        });
+        
+        it('should mint NFT', async () => {
+            const payload = {
+                type: "entry_function_payload",
+                function: `${CONTRACT_ADDRESS}::nft::mint_nft`,
+                type_arguments: [],
+                arguments: [
+                    "Test NFT",
+                    "Test Description", 
+                    "https://example.com/image.png"
+                ]
+            };
+            
+            const txn = await client.generateTransaction(user1.address(), payload);
+            const signedTxn = await client.signTransaction(user1, txn);
+            const result = await client.submitTransaction(signedTxn);
+            
+            await client.waitForTransaction(result.hash);
+            
+            // 이벤트에서 NFT ID 추출
+            nftId = extractNFTIdFromEvents(result);
+            expect(nftId).toBeGreaterThan(0);
+        });
+        
+        it('should complete marketplace transaction', async () => {
+            // 1. NFT를 마켓플레이스에 등록
+            await listNFTOnMarketplace(user1, nftId, 300);
+            
+            // 2. user2가 NFT 구매
+            await buyNFTFromMarketplace(user2, user1.address().hex(), nftId);
+            
+            // 3. 결과 검증
+            const owner = await getNFTOwner(nftId);
+            expect(owner).toBe(user2.address().hex());
+            
+            const user1Balance = await getTokenBalance(user1.address().hex());
+            const user2Balance = await getTokenBalance(user2.address().hex());
+            
+            expect(user1Balance).toBe(800); // 500 + 300
+            expect(user2Balance).toBe(200); // 500 - 300
+        });
+    });
+    
+    // 스트레스 테스트
+    describe('Stress Tests', () => {
+        it('should handle multiple concurrent transactions', async () => {
+            const promises = [];
+            
+            // 100개의 동시 트랜잭션 생성
+            for (let i = 0; i < 100; i++) {
+                const promise = transferTokens(
+                    i % 2 === 0 ? user1 : user2,
+                    i % 2 === 0 ? user2.address().hex() : user1.address().hex(),
+                    1
+                );
+                promises.push(promise);
+            }
+            
+            // 모든 트랜잭션 완료 대기
+            const results = await Promise.allSettled(promises);
+            
+            // 성공률 확인 (최소 95% 성공)
+            const successCount = results.filter(r => r.status === 'fulfilled').length;
+            const successRate = successCount / results.length;
+            
+            expect(successRate).toBeGreaterThanOrEqual(0.95);
+        });
+    });
+});
+
+// 헬퍼 함수들
+async function waitForDeployment(): Promise<void> {
+    // 계약 배포 완료까지 대기
+    await new Promise(resolve => setTimeout(resolve, 5000));
+}
+
+async function getTokenBalance(address: string): Promise<number> {
+    try {
+        const resource = await client.getAccountResource(
+            address,
+            `${CONTRACT_ADDRESS}::token::TokenStore`
+        );
+        return parseInt((resource.data as any).balance);
+    } catch {
+        return 0;
+    }
+}
+
+function extractNFTIdFromEvents(result: any): number {
+    // 이벤트에서 NFT ID 추출 로직
+    const events = result.events || [];
+    for (const event of events) {
+        if (event.type.includes('NFTMinted')) {
+            return parseInt(event.data.token_id);
+        }
+    }
+    return 0;
+}
+
+async function listNFTOnMarketplace(seller: AptosAccount, nftId: number, price: number): Promise<void> {
+    const payload = {
+        type: "entry_function_payload",
+        function: `${CONTRACT_ADDRESS}::marketplace::list_nft`,
+        type_arguments: [],
+        arguments: [nftId.toString(), price.toString()]
+    };
+    
+    const txn = await client.generateTransaction(seller.address(), payload);
+    const signedTxn = await client.signTransaction(seller, txn);
+    const result = await client.submitTransaction(signedTxn);
+    
+    await client.waitForTransaction(result.hash);
+}
+```
+
+## 📈 4. 테스트 커버리지와 품질
+
+### 커버리지 측정
+```bash
+#!/bin/bash
+# scripts/test-coverage.sh
+
+echo "=== Move 테스트 커버리지 측정 ==="
+
+# 커버리지 테스트 실행
+movement move test --coverage --output-format html --output-dir coverage-report
+
+# 커버리지 통계 표시
+echo "커버리지 리포트 생성 완료:"
+echo "📊 HTML 리포트: coverage-report/index.html"
+
+# 커버리지 임계값 확인
+COVERAGE=$(movement move test --coverage --summary | grep -oP '\d+(?=% coverage)')
+
+if [ "$COVERAGE" -ge 90 ]; then
+    echo "✅ 커버리지 $COVERAGE% - 목표 달성!"
+elif [ "$COVERAGE" -ge 80 ]; then
+    echo "⚠️ 커버리지 $COVERAGE% - 개선 권장"
+else
+    echo "❌ 커버리지 $COVERAGE% - 개선 필요"
+    exit 1
+fi
+```
+
+### 테스트 품질 메트릭
+```move
+#[test_only]
+module movement::test_quality_metrics {
+    // 테스트 복잡도 측정
+    #[test]
+    fun test_cyclomatic_complexity() {
+        // 복잡한 조건문이 있는 함수 테스트
+        let result = complex_function(10, true, 5);
+        assert!(result == 15, 1);
+        
+        let result2 = complex_function(10, false, 5);  
+        assert!(result2 == 50, 2);
+    }
+    
+    fun complex_function(a: u64, condition: bool, b: u64): u64 {
+        if (condition) {
+            if (a > 5) {
+                a + b
+            } else {
+                a - b  
+            }
+        } else {
+            if (b > 3) {
+                a * b
+            } else {
+                a / b
+            }
+        }
+    }
+    
+    // 테스트 데이터 품질
+    #[test]
+    fun test_data_quality() {
+        // 경계값 테스트
+        test_boundary_values();
+        
+        // 대표값 테스트
+        test_representative_values();
+        
+        // 에러 케이스 테스트
+        test_error_cases();
+    }
+    
+    fun test_boundary_values() {
+        // 0, 1, 최대값 등
+        assert!(math_function(0) == 0, 1);
+        assert!(math_function(1) == 1, 2);
+    }
+    
+    fun test_representative_values() {
+        // 일반적인 사용 케이스
+        assert!(math_function(10) == 100, 1);
+        assert!(math_function(25) == 625, 2);
+    }
+    
+    fun test_error_cases() {
+        // 에러가 예상되는 케이스들
+        // (실제로는 expected_failure 테스트들)
+    }
+    
+    fun math_function(x: u64): u64 {
+        x * x
+    }
+}
+```
+
+## 🔄 5. CI/CD 테스트 자동화
+
+### GitHub Actions 워크플로우
+```yaml
+# .github/workflows/test.yml
+name: Movement Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Install Movement CLI
+      run: |
+        curl -LO https://github.com/movementlabs/aptos-core/releases/latest/movement-cli.tar.gz
+        tar -xzf movement-cli.tar.gz
+        sudo mv movement /usr/local/bin/
+        
+    - name: Run Unit Tests
+      run: |
+        movement move test --coverage
+        
+    - name: Generate Coverage Report
+      run: |
+        movement move test --coverage --output-format html --output-dir coverage
+        
+    - name: Upload Coverage
+      uses: codecov/codecov-action@v3
+      with:
+        directory: ./coverage
+        
+  integration

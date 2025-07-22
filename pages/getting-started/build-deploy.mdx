@@ -1,0 +1,748 @@
+# 🚀 Build & Deploy 기초 가이드
+
+Movement Network에서 스마트 계약을 빌드하고 배포하는 전체 과정을 단계별로 알아보겠습니다. 로컬 테스트부터 메인넷 배포까지 포함합니다.
+
+## 🎯 학습 목표
+
+이 가이드를 완료하면:
+- Move.toml 설정 파일을 완전히 이해할 수 있습니다
+- 로컬에서 테스트하고 빌드할 수 있습니다
+- 테스트넷과 메인넷에 배포할 수 있습니다
+- 배포된 모듈을 확인하고 상호작용할 수 있습니다
+
+## 📋 1. Move.toml 설정 파일 이해
+
+Move.toml은 프로젝트의 메타데이터와 설정을 관리하는 핵심 파일입니다.
+
+### 기본 Move.toml 구조
+```toml
+[package]
+name = "hello-movement"
+version = "0.1.0"
+authors = ["Your Name <your.email@example.com>"]
+
+[addresses]
+hello_movement = "_"
+admin = "0x742d35cc6d65c86c5c2a75d8b2b7be7e3e5d2e1a3b4c5d6e7f8g9h0i1j2k3l4m"
+
+[dependencies]
+MoveStdlib = { 
+    git = "https://github.com/movementlabsxyz/aptos-core.git", 
+    subdir = "aptos-move/framework/move-stdlib", 
+    rev = "mainnet" 
+}
+MovementFramework = { 
+    git = "https://github.com/movementlabsxyz/aptos-core.git", 
+    subdir = "aptos-move/framework/aptos-framework", 
+    rev = "mainnet" 
+}
+
+[dev-dependencies]
+# 테스트용 의존성
+
+[dev-addresses]
+# 개발/테스트용 주소
+test_admin = "0x1"
+```
+
+### 각 섹션 설명
+
+#### [package] - 프로젝트 메타데이터
+```toml
+[package]
+name = "my-dapp"           # 프로젝트 이름
+version = "1.0.0"          # 버전 (Semantic Versioning)
+authors = ["Team <team@example.com>"]  # 작성자 정보
+license = "MIT"            # 라이센스
+repository = "https://github.com/user/my-dapp"  # 저장소 URL
+```
+
+#### [addresses] - 주소 별칭
+```toml
+[addresses]
+my_dapp = "_"              # 빌드 시 결정되는 주소
+admin = "0x1"              # 고정 관리자 주소
+treasury = "0x2"           # 트레저리 주소
+```
+
+#### [dependencies] - 외부 의존성
+```toml
+[dependencies]
+# Movement 표준 라이브러리
+MoveStdlib = { 
+    git = "https://github.com/movementlabsxyz/aptos-core.git", 
+    subdir = "aptos-move/framework/move-stdlib", 
+    rev = "mainnet" 
+}
+
+# Movement 프레임워크
+MovementFramework = { 
+    git = "https://github.com/movementlabsxyz/aptos-core.git", 
+    subdir = "aptos-move/framework/aptos-framework", 
+    rev = "mainnet" 
+}
+
+# 로컬 의존성 예시
+# MyLibrary = { local = "../my-library" }
+
+# 특정 버전 태그 사용
+# TokenFramework = { 
+#     git = "https://github.com/example/tokens.git",
+#     tag = "v1.0.0"
+# }
+```
+
+## 🔨 2. 로컬 빌드 과정
+
+### 단계별 빌드
+```bash
+# 1. 프로젝트 디렉토리로 이동
+cd my-dapp
+
+# 2. 의존성 체크
+movement move deps
+
+# 3. 문법 검사
+movement move check
+
+# 4. 빌드 실행
+movement move build
+```
+
+### 빌드 결과 확인
+```bash
+# 빌드 디렉토리 구조 확인
+tree build/
+
+# build/
+# ├── my-dapp/
+# │   ├── bytecode_modules/    # 컴파일된 바이트코드
+# │   ├── source_maps/         # 디버깅 정보
+# │   └── sources/             # 소스 코드 복사본
+# └── package_deps/            # 의존성 패키지들
+```
+
+### 빌드 최적화
+```bash
+# 릴리즈 빌드 (최적화됨)
+movement move build --release
+
+# 개발용 빌드 (디버그 정보 포함)
+movement move build --dev
+
+# 병렬 빌드 (속도 향상)
+movement move build --parallel
+
+# 의존성 포함 빌드
+movement move build --include-deps
+```
+
+## 🧪 3. 로컬 테스트
+
+배포 전 로컬에서 철저한 테스트를 진행합니다.
+
+### 전체 테스트 실행
+```bash
+# 모든 테스트 실행
+movement move test
+
+# 자세한 출력
+movement move test --verbose
+
+# 커버리지 확인
+movement move test --coverage
+```
+
+### 특정 테스트 실행
+```bash
+# 특정 함수만 테스트
+movement move test --filter test_mint_token
+
+# 특정 모듈만 테스트  
+movement move test --filter token_module
+
+# 실패한 테스트만 재실행
+movement move test --rerun-failed
+```
+
+### 가스 프로파일링
+```bash
+# 가스 사용량 확인
+movement move test --gas-profile
+
+# 가스 한도 테스트
+movement move test --gas-limit 10000
+```
+
+## 🌐 4. 네트워크별 배포 전략
+
+### 개발 환경별 설정
+```toml
+# Move.toml에서 환경별 설정
+[dev-addresses]
+admin = "0x1"
+treasury = "0x2"
+
+[dev-dependencies]
+# 테스트용 mock 모듈들
+```
+
+### 네트워크 설정 확인
+```bash
+# 현재 네트워크 확인
+movement config show
+
+# 테스트넷으로 변경
+movement config set-network testnet
+
+# 메인넷으로 변경  
+movement config set-network mainnet
+```
+
+## 🧪 5. 테스트넷 배포
+
+### 테스트넷 계정 준비
+```bash
+# 테스트넷 계정 생성
+movement account create --account-name testnet-deployer
+
+# Faucet에서 토큰 받기
+movement account fund --account-name testnet-deployer
+
+# 잔액 확인
+movement account balance --account-name testnet-deployer
+```
+
+### 테스트넷 배포 실행
+```bash
+# 배포 시뮬레이션 (실제 배포하지 않음)
+movement move publish --simulate --account-name testnet-deployer
+
+# 실제 배포
+movement move publish --account-name testnet-deployer
+
+# 특정 모듈만 배포
+movement move publish --modules token,nft --account-name testnet-deployer
+```
+
+### 배포 결과 확인
+```bash
+# 배포된 모듈 확인
+movement account modules --account-name testnet-deployer
+
+# 특정 모듈 정보 조회
+movement move view-module \
+    --address $(movement account show --account-name testnet-deployer | grep Address | cut -d' ' -f2) \
+    --module-name token
+```
+
+## 📊 6. 배포 검증 및 테스트
+
+### 배포된 함수 호출 테스트
+```bash
+# 모듈 함수 목록 확인
+movement move view-functions \
+    --address <DEPLOYED_ADDRESS> \
+    --module-name token
+
+# 공개 함수 호출
+movement move run-function \
+    --function-id <ADDRESS>::token::mint \
+    --args address:<RECIPIENT> u64:1000 \
+    --account-name testnet-deployer
+```
+
+### 실전 테스트 스크립트
+```bash
+#!/bin/bash
+echo "=== 배포 검증 스크립트 ==="
+
+DEPLOYER="testnet-deployer" 
+ADDRESS=$(movement account show --account-name $DEPLOYER | grep Address | cut -d' ' -f2)
+
+echo "배포 주소: $ADDRESS"
+
+# 1. 모듈 존재 확인
+echo "모듈 확인 중..."
+movement account modules --account-name $DEPLOYER
+
+# 2. 함수 목록 확인
+echo "함수 목록 확인 중..."
+movement move view-functions --address $ADDRESS --module-name token
+
+# 3. 기본 함수 테스트
+echo "기본 함수 테스트 중..."
+movement move run-function \
+    --function-id $ADDRESS::token::get_name \
+    --account-name $DEPLOYER
+
+echo "검증 완료! ✅"
+```
+
+## 🏭 7. 메인넷 배포
+
+### 메인넷 배포 준비사항
+```bash
+# 1. 메인넷 계정 생성 (실제 MOVE 토큰 필요)
+movement account create --account-name mainnet-deployer --network mainnet
+
+# 2. 충분한 가스비 확보
+movement account balance --account-name mainnet-deployer
+
+# 3. 최종 코드 검토
+movement move check
+movement move test --coverage
+```
+
+### 프로덕션 Move.toml 설정
+```toml
+[package]
+name = "my-production-dapp"
+version = "1.0.0"
+authors = ["Production Team <team@company.com>"]
+
+[addresses]
+# 실제 배포 주소로 설정
+my_dapp = "0x742d35cc6d65c86c5c2a75d8b2b7be7e3e5d2e1a3b4c5d6e7f8g9h0i1j2k3l4m"
+admin = "0x123..."
+treasury = "0x456..."
+
+# 프로덕션 의존성 (안정 버전 사용)
+[dependencies]
+MoveStdlib = { 
+    git = "https://github.com/movementlabsxyz/aptos-core.git", 
+    subdir = "aptos-move/framework/move-stdlib", 
+    tag = "v1.0.0"  # 특정 태그 사용
+}
+```
+
+### 메인넷 배포 실행
+```bash
+# 네트워크 변경
+movement config set-network mainnet
+
+# 배포 전 최종 시뮬레이션
+movement move publish --simulate --account-name mainnet-deployer
+
+# 실제 메인넷 배포
+movement move publish --account-name mainnet-deployer --gas-limit 50000
+
+# 배포 확인
+movement account modules --account-name mainnet-deployer
+```
+
+## 🔄 8. 업그레이드와 마이그레이션
+
+### 업그레이드 가능한 배포
+```bash
+# 업그레이드 가능하게 배포
+movement move publish --upgrade --account-name deployer
+
+# 호환성 확인 후 업그레이드
+movement move publish --upgrade --compatibility-check --account-name deployer
+```
+
+### 버전 관리
+```toml
+# Move.toml에서 버전 관리
+[package]
+name = "my-dapp"
+version = "1.1.0"  # 버전 업데이트
+
+# 이전 버전과 호환성 유지
+[compatibility]
+min_version = "1.0.0"
+```
+
+## 🚨 9. 문제 해결
+
+### 일반적인 배포 에러
+
+#### 주소 설정 에러
+```bash
+# 에러: Address not found
+# 해결: Move.toml의 [addresses] 섹션 확인
+[addresses]
+my_dapp = "_"  # 올바른 설정
+```
+
+#### 의존성 에러
+```bash
+# 에러: Dependency not found
+# 해결: 의존성 업데이트
+movement move clean
+movement move build
+```
+
+#### 가스 부족 에러
+```bash
+# 에러: Insufficient gas
+# 해결: 가스 한도 증가 또는 토큰 충전
+movement account fund --account-name deployer
+movement move publish --gas-limit 100000 --account-name deployer
+```
+
+### 네트워크 연결 문제
+```bash
+# RPC 연결 테스트
+curl -X POST -H "Content-Type: application/json" \
+    -d '{"jsonrpc":"2.0","method":"get_ledger_info","id":1}' \
+    https://testnet.bardock.movementnetwork.xyz/v1
+
+# 대체 RPC 사용
+movement config set-network-url https://backup-rpc.movementnetwork.xyz/v1
+```
+
+## 📋 10. 배포 체크리스트
+
+### 배포 전 점검사항
+- [ ] 코드 리뷰 완료
+- [ ] 모든 테스트 통과 (100% 커버리지)
+- [ ] 보안 감사 완료
+- [ ] Move.toml 설정 검증
+- [ ] 가스비 충분히 준비
+- [ ] 백업 계획 수립
+
+### 배포 후 검증사항
+- [ ] 모듈 정상 배포 확인
+- [ ] 주요 함수 동작 테스트
+- [ ] 이벤트 발생 확인
+- [ ] 가스 사용량 모니터링
+- [ ] 사용자 피드백 수집
+
+## 🎯 11. 실전 배포 시나리오
+
+### DeFi 프로토콜 배포 예시
+```bash
+#!/bin/bash
+# DeFi 프로토콜 배포 스크립트
+echo "=== DeFi 프로토콜 배포 시작 ==="
+
+PROJECT="defi-protocol"
+DEPLOYER="defi-deployer"
+
+# 1. 환경 준비
+echo "환경 준비 중..."
+cd $PROJECT
+movement config set-network testnet
+
+# 2. 코드 품질 검사
+echo "코드 품질 검사 중..."
+movement move check
+movement move test --coverage
+
+# 3. 의존성 확인
+echo "의존성 확인 중..."
+movement move deps
+
+# 4. 시뮬레이션
+echo "배포 시뮬레이션 중..."
+movement move publish --simulate --account-name $DEPLOYER
+
+# 5. 실제 배포
+echo "테스트넷에 배포 중..."
+movement move publish --account-name $DEPLOYER
+
+# 6. 배포 검증
+echo "배포 검증 중..."
+ADDRESS=$(movement account show --account-name $DEPLOYER | grep Address | cut -d' ' -f2)
+
+# 핵심 함수들 테스트
+movement move run-function \
+    --function-id $ADDRESS::liquidity_pool::create_pool \
+    --args address:0x1 address:0x2 \
+    --account-name $DEPLOYER
+
+echo "DeFi 프로토콜 배포 완료! 🚀"
+echo "배포 주소: $ADDRESS"
+```
+
+### NFT 컬렉션 배포
+```bash
+#!/bin/bash
+# NFT 컬렉션 배포 스크립트
+echo "=== NFT 컬렉션 배포 ==="
+
+# 프로젝트 설정
+PROJECT="movement-nft"
+DEPLOYER="nft-creator"
+COLLECTION_NAME="Movement Heroes"
+COLLECTION_SIZE=10000
+
+# 배포 실행
+cd $PROJECT
+
+echo "NFT 컬렉션 '$COLLECTION_NAME' 배포 중..."
+movement move publish --account-name $DEPLOYER
+
+# 컬렉션 초기화
+ADDRESS=$(movement account show --account-name $DEPLOYER | grep Address | cut -d' ' -f2)
+
+movement move run-function \
+    --function-id $ADDRESS::nft_collection::create_collection \
+    --args string:"$COLLECTION_NAME" u64:$COLLECTION_SIZE \
+    --account-name $DEPLOYER
+
+echo "NFT 컬렉션 배포 완료!"
+```
+
+### 게임 dApp 배포
+```bash
+#!/bin/bash
+# 게임 dApp 다단계 배포
+echo "=== 게임 dApp 배포 ==="
+
+PROJECTS=("game-core" "game-items" "game-marketplace")
+DEPLOYER="game-studio"
+
+for project in "${PROJECTS[@]}"; do
+    echo "배포 중: $project"
+    cd $project
+    
+    # 각 모듈 개별 테스트
+    movement move test --filter $project
+    
+    # 단계별 배포
+    movement move publish --account-name $DEPLOYER
+    
+    cd ..
+done
+
+echo "게임 dApp 전체 배포 완료!"
+```
+
+## 🔧 12. 고급 배포 기법
+
+### 다중 서명 배포
+```bash
+# 다중 서명 계정으로 안전한 배포
+movement move publish \
+    --account-name multisig-account \
+    --multisig-threshold 2 \
+    --multisig-keys key1.json,key2.json,key3.json
+```
+
+### 조건부 배포
+```bash
+#!/bin/bash
+# 조건부 배포 스크립트
+
+# 네트워크별 배포
+case $NETWORK in
+    "testnet")
+        echo "테스트넷 배포..."
+        movement move publish --account-name test-deployer
+        ;;
+    "mainnet")
+        echo "메인넷 배포 - 추가 검증..."
+        movement move test --coverage --minimum-coverage 95
+        movement move publish --account-name prod-deployer --gas-limit 100000
+        ;;
+    *)
+        echo "지원하지 않는 네트워크: $NETWORK"
+        exit 1
+        ;;
+esac
+```
+
+### 롤백 가능한 배포
+```bash
+#!/bin/bash
+# 롤백 가능한 배포 전략
+
+CURRENT_VERSION=$(grep version Move.toml | cut -d'"' -f2)
+echo "현재 버전: $CURRENT_VERSION"
+
+# 백업 생성
+cp -r . ../backup-$CURRENT_VERSION
+
+# 배포 시도
+if movement move publish --account-name deployer; then
+    echo "배포 성공: v$CURRENT_VERSION"
+else
+    echo "배포 실패 - 롤백 중..."
+    cp -r ../backup-$CURRENT_VERSION/* .
+    exit 1
+fi
+```
+
+## 📈 13. 모니터링과 유지보수
+
+### 배포 후 모니터링
+```bash
+#!/bin/bash
+# 배포 후 헬스체크 스크립트
+
+ADDRESS="0x742d35cc6d65c86c5c2a75d8b2b7be7e3e5d2e1a3b4c5d6e7f8g9h0i1j2k3l4m"
+MODULE="token"
+
+echo "=== 헬스체크 시작 ==="
+
+# 1. 모듈 존재 확인
+if movement move view-module --address $ADDRESS --module-name $MODULE > /dev/null 2>&1; then
+    echo "✅ 모듈 존재 확인"
+else
+    echo "❌ 모듈 없음"
+    exit 1
+fi
+
+# 2. 핵심 함수 동작 확인
+movement move run-function \
+    --function-id $ADDRESS::$MODULE::get_total_supply \
+    --query-only
+
+# 3. 이벤트 모니터링
+movement account events --address $ADDRESS --limit 10
+
+echo "헬스체크 완료"
+```
+
+### 업그레이드 모니터링
+```bash
+# 업그레이드 필요 여부 확인
+movement move compatibility-check \
+    --old-package old-version/ \
+    --new-package current-version/
+```
+
+## 🎨 14. CI/CD 파이프라인 설정
+
+### GitHub Actions 예시
+```yaml
+# .github/workflows/deploy.yml
+name: Movement dApp Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Install Movement CLI
+        run: |
+          curl -LO https://github.com/movementlabsxyz/aptos-core/releases/download/v1.0.0/movement-linux.tar.gz
+          tar -xzf movement-linux.tar.gz
+          sudo mv movement /usr/local/bin/
+          
+      - name: Test
+        run: |
+          movement move test --coverage
+          
+  deploy-testnet:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Deploy to Testnet
+        env:
+          PRIVATE_KEY: ${{ secrets.TESTNET_PRIVATE_KEY }}
+        run: |
+          echo "$PRIVATE_KEY" > /tmp/key.txt
+          movement account import --account-name ci-deployer --private-key-file /tmp/key.txt
+          movement move publish --account-name ci-deployer
+```
+
+### Docker 기반 배포
+```dockerfile
+# Dockerfile
+FROM ubuntu:20.04
+
+# Movement CLI 설치
+RUN apt-get update && apt-get install -y curl
+RUN curl -LO https://github.com/movementlabsxyz/aptos-core/releases/download/v1.0.0/movement-linux.tar.gz
+RUN tar -xzf movement-linux.tar.gz && mv movement /usr/local/bin/
+
+# 프로젝트 복사
+COPY . /app
+WORKDIR /app
+
+# 배포 스크립트 실행
+CMD ["./deploy.sh"]
+```
+
+```bash
+# docker-deploy.sh
+#!/bin/bash
+docker build -t movement-dapp .
+docker run -e PRIVATE_KEY="$TESTNET_PRIVATE_KEY" movement-dapp
+```
+
+## 📊 15. 성능 최적화
+
+### 가스 최적화
+```bash
+# 가스 사용량 프로파일링
+movement move test --gas-profile --output-file gas-report.json
+
+# 최적화 후 비교
+movement move build --release
+movement move test --gas-profile --output-file gas-report-optimized.json
+
+# 차이점 분석
+diff gas-report.json gas-report-optimized.json
+```
+
+### 빌드 최적화
+```bash
+# 병렬 빌드로 속도 향상
+movement move build --parallel --jobs 4
+
+# 캐시 활용
+export MOVEMENT_CACHE_DIR=~/.movement-cache
+movement move build --use-cache
+```
+
+## 🔒 16. 보안 고려사항
+
+### 배포 전 보안 체크
+```bash
+#!/bin/bash
+echo "=== 보안 체크리스트 ==="
+
+# 1. 권한 확인
+echo "권한 설정 확인 중..."
+grep -r "public entry" sources/ || echo "⚠️ entry 함수 없음"
+
+# 2. 하드코딩된 주소 검사
+echo "하드코딩된 주소 검사 중..."
+grep -r "0x[0-9a-fA-F]\{16,\}" sources/ && echo "⚠️ 하드코딩된 주소 발견"
+
+# 3. 테스트 커버리지 확인
+echo "테스트 커버리지 확인 중..."
+movement move test --coverage --minimum-coverage 90
+
+echo "보안 체크 완료"
+```
+
+### 키 관리
+```bash
+# 안전한 키 저장
+export MOVEMENT_KEYSTORE_PATH=~/.movement-secure/
+movement account create --account-name secure-deployer --keystore-path $MOVEMENT_KEYSTORE_PATH
+```
+
+## 🔗 다음 단계
+
+Build & Deploy를 마스터했다면:
+
+**[기본 개념으로 더 깊이 학습하기 →](/basic-concepts)**
+
+**[고급 개념 탐구하기 →](/advanced-concepts)**
+
+## 📚 참고 자료
+
+- [Movement 개발자 포털](https://developer.movementnetwork.xyz/)
+- [Movement 공식 문서](https://docs.movementnetwork.xyz/)
+- [Movement GitHub 저장소](https://github.com/movementlabsxyz)
+
+---
+
+*안전하고 효율적인 배포로 성공적인 dApp을 런칭하세요! 🌟*

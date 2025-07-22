@@ -1,0 +1,8 @@
+{
+  "index": "개요",
+  "environment-setup": "🛠️ 개발 환경 세팅",
+  "first-module": "📝 첫 Move 모듈 만들기",
+  "accounts-faucet": "💳 계정 생성 & Faucet",
+  "cli-commands": "⌨️ CLI 주요 명령어",
+  "build-deploy": "🚀 Build & Deploy"
+}

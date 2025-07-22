@@ -1,0 +1,315 @@
+# 🛠️ 개발 환경 세팅
+
+Movement Network 개발에 필요한 모든 도구를 설치하고 설정하는 과정을 단계별로 안내합니다.
+
+## 📋 설치 체크리스트
+
+다음 도구들이 필요합니다:
+- [ ] Rust & Cargo
+- [ ] Git
+- [ ] Movement CLI
+- [ ] VS Code + Move Extension
+- [ ] 터미널 (macOS/Linux) 또는 WSL2 (Windows)
+
+## 🦀 1. Rust 설치
+
+Move 언어는 Rust로 구현되어 있어 Rust 컴파일러가 필요합니다.
+
+### macOS & Linux
+```bash
+# Rust 공식 설치 스크립트
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# 환경변수 적용
+source ~/.bashrc
+# 또는 zsh 사용자는
+source ~/.zshrc
+
+# 설치 확인
+rustc --version
+cargo --version
+```
+
+### Windows (WSL2 권장)
+```bash
+# WSL2에서 위와 동일한 명령어 사용
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+### 설치 확인
+```bash
+$ rustc --version
+rustc 1.75.0 (82e1608df 2023-12-21)
+
+$ cargo --version  
+cargo 1.75.0 (1d8b05cdd 2023-11-20)
+```
+
+## 📂 2. Git 설치
+
+버전 관리와 Movement CLI 설치에 필요합니다.
+
+### macOS
+```bash
+# Homebrew 사용 (권장)
+brew install git
+
+# 또는 Xcode Command Line Tools
+xcode-select --install
+```
+
+### Linux (Ubuntu/Debian)
+```bash
+sudo apt update
+sudo apt install git
+```
+
+### Windows
+- [Git for Windows](https://git-scm.com/download/win) 다운로드
+- 또는 WSL2에서 위 Linux 명령어 사용
+
+### 설치 확인
+```bash
+$ git --version
+git version 2.39.0
+```
+
+## ⚡ 3. Movement CLI 설치
+
+Movement 개발의 핵심 도구입니다.
+
+### 바이너리 설치 (macOS ARM)
+```bash
+# 사전 컴파일된 바이너리 다운로드
+curl -LO https://github.com/movementlabsxyz/homebrew-movement-cli/releases/download/bypass-homebrew/movement-macos-arm64.tar.gz
+
+# 압축 해제
+tar -xzf movement-macos-arm64.tar.gz
+
+# 실행 권한 부여
+chmod +x macos-arm64/movement
+
+# 시스템 PATH에 추가
+sudo mv macos-arm64/movement /usr/local/bin/movement
+```
+
+### 소스코드 빌드 (모든 플랫폼)
+```bash
+# Movement CLI 저장소 클론
+git clone https://github.com/movementlabsxyz/aptos-core/
+cd aptos-core
+
+# 빌드 (시간이 오래 걸릴 수 있음)
+cargo build --release -p movement
+
+# 바이너리를 PATH에 추가
+sudo cp target/release/movement /usr/local/bin/
+```
+
+### 설치 확인
+```bash
+$ movement --version
+movement 1.0.0
+
+$ movement --help
+Movement CLI
+
+USAGE:
+    movement <SUBCOMMAND>
+
+SUBCOMMANDS:
+    account    Account related commands
+    move       Move related commands
+    config     Config related commands
+```
+
+## 💻 4. VS Code & 확장 설치
+
+개발 효율성을 위해 VS Code와 Move 확장을 설치합니다.
+
+### VS Code 설치
+1. [VS Code 공식 사이트](https://code.visualstudio.com/)에서 다운로드
+2. 운영체제에 맞는 버전 설치
+
+### Move Language Extension
+VS Code에서 다음 확장들을 설치하세요:
+
+1. **Move Language Extension**
+   - 확장 마켓플레이스에서 "Move" 검색
+   - PontemNetwork의 Move Language 설치
+   - 문법 하이라이팅, 자동완성 제공
+
+2. **추가 권장 확장**
+   - **GitLens**: Git 기능 강화
+   - **Error Lens**: 인라인 에러 표시
+   - **Bracket Pair Colorizer**: 괄호 색상 구분
+
+### 확장 설정
+`.vscode/settings.json`에 다음 설정 추가:
+```json
+{
+    "move.compiler.path": "/usr/local/bin/movement",
+    "move.enableTelemetry": false,
+    "editor.formatOnSave": true
+}
+```
+
+## 🔧 5. 환경 설정
+
+### 환경변수 설정
+`~/.bashrc` 또는 `~/.zshrc`에 추가:
+```bash
+# Movement CLI PATH (이미 설정되어 있을 수 있음)
+export PATH="$PATH:/usr/local/bin"
+
+# Move 프로젝트 기본 디렉토리 (선택사항)
+export MOVEMENT_HOME="$HOME/movement-projects"
+```
+
+### 터미널 설정 적용
+```bash
+# bash 사용자
+source ~/.bashrc
+
+# zsh 사용자  
+source ~/.zshrc
+```
+
+## ✅ 6. 설치 검증
+
+모든 도구가 올바르게 설치되었는지 확인합니다.
+
+### 종합 검증 스크립트
+```bash
+#!/bin/bash
+echo "=== Movement 개발 환경 검증 ==="
+
+# Rust 확인
+if command -v rustc &> /dev/null; then
+    echo "✅ Rust: $(rustc --version)"
+else
+    echo "❌ Rust: 설치되지 않음"
+fi
+
+# Git 확인  
+if command -v git &> /dev/null; then
+    echo "✅ Git: $(git --version)"
+else
+    echo "❌ Git: 설치되지 않음"
+fi
+
+# Movement CLI 확인
+if command -v movement &> /dev/null; then
+    echo "✅ Movement CLI: $(movement --version)"
+else
+    echo "❌ Movement CLI: 설치되지 않음"
+fi
+
+echo "=== 검증 완료 ==="
+```
+
+### 간단한 테스트 프로젝트
+```bash
+# 테스트 프로젝트 생성
+movement move init test-project
+cd test-project
+
+# 기본 빌드 테스트
+movement move build
+
+# 성공 메시지 확인
+echo "환경 설정이 완료되었습니다! 🎉"
+```
+
+## 🚨 문제 해결
+
+### 일반적인 문제들
+
+#### Rust 설치 문제
+```bash
+# Rust가 PATH에 없는 경우
+echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+#### Movement CLI 권한 문제
+```bash
+# 실행 권한이 없는 경우
+chmod +x /usr/local/bin/movement
+
+# 관리자 권한이 필요한 경우
+sudo cp movement /usr/local/bin/
+```
+
+#### 빌드 에러 해결
+```bash
+# 캐시 정리
+cargo clean
+
+# 의존성 업데이트
+cargo update
+
+# 다시 빌드
+cargo build --release
+```
+
+### 플랫폼별 이슈
+
+#### macOS
+```bash
+# Xcode Command Line Tools 누락
+xcode-select --install
+
+# Homebrew 설치 (없는 경우)
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+#### Linux
+```bash
+# 빌드 도구 설치
+sudo apt install build-essential
+
+# LLVM 설치 (필요한 경우)
+sudo apt install llvm
+```
+
+#### Windows (WSL2)
+```bash
+# WSL2에서 Git 설정
+git config --global core.autocrlf input
+
+# Windows 경로 문제 해결
+export PATH="/usr/local/bin:$PATH"
+```
+
+## 📱 추가 도구 (선택사항)
+
+### Cursor IDE (AI 지원 에디터)
+- [Cursor 공식 사이트](https://cursor.sh/)에서 다운로드
+- VS Code 대신 사용 가능
+- AI 코드 완성 기능 제공
+
+### Terminal 개선
+```bash
+# Oh My Zsh 설치 (macOS/Linux)
+sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
+
+# 유용한 플러그인
+plugins=(git rust cargo)
+```
+
+## 🔗 다음 단계
+
+개발 환경 설정이 완료되었다면:
+
+**[첫 Move 모듈 만들기 →](/getting-started/first-module)**
+
+## 📚 참고 자료
+
+- [Movement 개발자 포털](https://developer.movementnetwork.xyz/)
+- [Movement 공식 문서](https://docs.movementnetwork.xyz/)
+- [Rust 공식 문서](https://doc.rust-lang.org/)
+
+---
+
+*개발 환경이 준비되었습니다! 이제 첫 번째 Move 모듈을 만들어보세요! 🚀*

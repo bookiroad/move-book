@@ -1,0 +1,559 @@
+# 📋 Movement CLI 상세 가이드
+
+Movement CLI의 모든 고급 기능을 마스터하여 개발 워크플로우를 극대화하는 방법을 알아보겠습니다.
+
+## 🎯 학습 목표
+
+이 가이드를 완료하면:
+- CLI의 모든 숨겨진 기능들을 활용할 수 있습니다
+- 복잡한 프로젝트 구조를 효율적으로 관리할 수 있습니다
+- 고급 빌드 옵션으로 성능을 최적화할 수 있습니다
+- 자동화 스크립트로 반복 작업을 줄일 수 있습니다
+
+## 🏗️ 1. 워크스페이스와 멀티패키지 관리
+
+### 워크스페이스 생성
+```bash
+# 새 워크스페이스 생성
+movement create-workspace my-dapp-workspace
+cd my-dapp-workspace
+
+# 워크스페이스 구조
+my-dapp-workspace/
+├── Move.toml              # 워크스페이스 설정
+├── contracts/             # 스마트 계약들
+│   ├── core/
+│   ├── tokens/
+│   └── nft/
+├── libraries/             # 공유 라이브러리
+│   └── utils/
+└── tests/                 # 통합 테스트
+    └── e2e/
+```
+
+### 워크스페이스 Move.toml 설정
+```toml
+[workspace]
+members = [
+    "contracts/core",
+    "contracts/tokens", 
+    "contracts/nft",
+    "libraries/utils"
+]
+
+[workspace.dependencies]
+MoveStdlib = { 
+    git = "https://github.com/movementlabsxyz/aptos-core.git", 
+    subdir = "aptos-move/framework/move-stdlib", 
+    rev = "mainnet" 
+}
+
+[workspace.addresses]
+core = "_"
+tokens = "_"
+nft = "_"
+utils = "_"
+```
+
+### 패키지별 작업
+```bash
+# 특정 패키지만 빌드
+movement move build --package core
+movement move build --package tokens
+
+# 모든 패키지 빌드
+movement move build --workspace
+
+# 의존성 그래프 확인
+movement move deps --workspace --graph
+
+# 패키지 간 의존성 체크
+movement move check-dependencies --workspace
+```
+
+## 🚀 2. 고급 빌드 옵션
+
+### 성능 최적화 빌드
+```bash
+# 릴리즈 최적화 빌드
+movement move build --release --optimize-level 3
+
+# 병렬 빌드 (CPU 코어 수 활용)
+movement move build --parallel --jobs $(nproc)
+
+# 증분 빌드 (변경된 부분만 재컴파일)
+movement move build --incremental
+
+# 캐시 활용 빌드
+movement move build --use-cache --cache-dir ~/.movement-cache
+```
+
+### 타겟별 빌드
+```bash
+# WebAssembly 타겟 빌드
+movement move build --target wasm32-unknown-unknown
+
+# 네이티브 타겟 빌드
+movement move build --target x86_64-unknown-linux-gnu
+
+# 크로스 컴파일
+movement move build --target aarch64-apple-darwin
+```
+
+### 고급 컴파일 옵션
+```bash
+# 디버그 심볼 포함
+movement move build --debug-info
+
+# 최적화 레벨 조정
+movement move build --opt-level 2
+
+# 코드 크기 최적화
+movement move build --optimize-size
+
+# 링크 시간 최적화
+movement move build --lto
+```
+
+## 🔧 3. 프로파일링과 분석
+
+### 가스 프로파일링
+```bash
+# 상세 가스 분석
+movement move test --gas-profile --output-file gas-report.json
+
+# 함수별 가스 사용량
+movement move profile --function-gas contracts/core/
+
+# 가스 최적화 제안
+movement move analyze-gas --suggest-optimizations
+
+# 가스 벤치마크
+movement move benchmark --gas-benchmark contracts/
+```
+
+### 성능 프로파일링
+```bash
+# 컴파일 시간 프로파일링
+movement move build --profile-compile-time
+
+# 메모리 사용량 분석
+movement move build --profile-memory
+
+# 의존성 분석
+movement move deps --analyze-impact
+
+# 빌드 병목 분석
+movement move build --profile-bottlenecks
+```
+
+### 코드 품질 분석
+```bash
+# 정적 분석
+movement move analyze --static-analysis
+
+# 코드 복잡도 분석
+movement move analyze --complexity
+
+# 보안 취약점 스캔
+movement move security-scan --comprehensive
+
+# 코드 커버리지 상세 분석
+movement move test --coverage --coverage-report html
+```
+
+## 🌐 4. 네트워크 고급 관리
+
+### 커스텀 네트워크 설정
+```bash
+# 새 네트워크 프로필 생성
+movement config create-network \
+    --name custom-testnet \
+    --rpc-url https://custom.rpc.url/v1 \
+    --chain-id 999 \
+    --faucet-url https://custom.faucet.url
+
+# 네트워크 프로필 관리
+movement config list-networks
+movement config use-network custom-testnet
+movement config remove-network old-network
+```
+
+### 프록시 및 고급 네트워크 설정
+```bash
+# 프록시 설정
+movement config set-proxy \
+    --http-proxy http://proxy.company.com:8080 \
+    --https-proxy https://proxy.company.com:8443
+
+# 타임아웃 설정
+movement config set-timeouts \
+    --connection-timeout 30s \
+    --read-timeout 60s
+
+# 재시도 정책 설정
+movement config set-retry-policy \
+    --max-retries 3 \
+    --backoff-factor 2.0
+```
+
+### 멀티 네트워크 배포
+```bash
+# 네트워크별 설정 파일
+# config/testnet.toml
+[network]
+name = "testnet"
+rpc = "https://testnet.bardock.movementnetwork.xyz/v1"
+accounts = ["alice-test", "bob-test"]
+
+# config/mainnet.toml
+[network]
+name = "mainnet" 
+rpc = "https://mainnet.movementnetwork.xyz/v1"
+accounts = ["alice-prod", "bob-prod"]
+
+# 네트워크별 배포
+movement deploy --config config/testnet.toml
+movement deploy --config config/mainnet.toml
+```
+
+## 📊 5. 고급 테스트 기능
+
+### 병렬 테스트 실행
+```bash
+# 병렬 테스트 (속도 향상)
+movement move test --parallel --test-threads 8
+
+# 테스트 분할 실행
+movement move test --shard 1/4  # 4개로 분할 중 1번째
+movement move test --shard 2/4  # 4개로 분할 중 2번째
+
+# 패키지별 병렬 테스트
+movement move test --workspace --parallel-packages
+```
+
+### 고급 테스트 필터링
+```bash
+# 정규식으로 테스트 필터링
+movement move test --filter "test_.*_integration"
+
+# 테스트 태그로 필터링
+movement move test --tag smoke-test
+movement move test --tag integration
+movement move test --exclude-tag slow
+
+# 조건부 테스트 실행
+movement move test --if-changed  # 변경된 코드만 테스트
+movement move test --since-commit HEAD~1  # 특정 커밋 이후 변경사항만
+```
+
+### 테스트 환경 관리
+```bash
+# 테스트용 임시 네트워크 생성
+movement test-network create --name temp-test-net
+
+# 격리된 테스트 환경
+movement move test --isolated-env
+
+# 테스트 데이터 시드
+movement move test --seed 12345 --deterministic
+```
+
+## 🤖 6. 자동화 스크립트 통합
+
+### 빌드 파이프라인 스크립트
+```bash
+#!/bin/bash
+# scripts/advanced-build.sh
+
+set -e
+
+echo "=== 고급 빌드 파이프라인 시작 ==="
+
+# 1. 환경 검증
+movement config validate
+
+# 2. 의존성 체크
+movement move deps --check-updates
+
+# 3. 병렬 빌드
+movement move build --workspace --parallel --optimize
+
+# 4. 품질 검사
+movement move analyze --all-checks
+
+# 5. 테스트 스위트
+movement move test --workspace --coverage --parallel
+
+# 6. 보안 스캔
+movement move security-scan --comprehensive
+
+# 7. 성능 벤치마크
+movement move benchmark --save-results benchmarks/
+
+echo "빌드 파이프라인 완료! ✅"
+```
+
+### 배포 자동화 스크립트
+```bash
+#!/bin/bash
+# scripts/smart-deploy.sh
+
+ENVIRONMENT=${1:-testnet}
+VERSION=${2:-$(git describe --tags --abbrev=0)}
+
+echo "=== 스마트 배포: $ENVIRONMENT v$VERSION ==="
+
+# 환경별 설정 로드
+source "config/${ENVIRONMENT}.env"
+
+# 사전 검증
+movement move test --filter "deploy_.*"
+movement move build --release
+
+# 배포 시뮬레이션
+movement move publish --simulate --account-name "$DEPLOY_ACCOUNT"
+
+# 실제 배포
+if [[ "$ENVIRONMENT" == "mainnet" ]]; then
+    echo "메인넷 배포 - 추가 확인 필요"
+    read -p "계속하시겠습니까? (y/N): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+        exit 1
+    fi
+fi
+
+movement move publish --account-name "$DEPLOY_ACCOUNT"
+
+# 배포 검증
+./scripts/verify-deployment.sh "$ENVIRONMENT" "$VERSION"
+```
+
+## 🔍 7. 고급 디버깅 기능
+
+### 상세 로깅
+```bash
+# 디버그 모드로 실행
+MOVEMENT_DEBUG=1 movement move build
+
+# 특정 모듈 로깅
+RUST_LOG=movement::compiler=debug movement move build
+
+# 로그를 파일로 저장
+movement move build --log-file build.log --log-level debug
+
+# 구조화된 로깅
+movement move build --log-format json | jq
+```
+
+### 트랜잭션 추적
+```bash
+# 트랜잭션 실행 추적
+movement transaction trace --hash 0xABC123...
+
+# 가스 사용량 상세 추적
+movement transaction gas-trace --hash 0xABC123...
+
+# 이벤트 추적
+movement transaction events --hash 0xABC123...
+
+# 실행 경로 시각화
+movement transaction visualize --hash 0xABC123... --output svg
+```
+
+### 상태 검사 도구
+```bash
+# 글로벌 상태 스냅샷
+movement state snapshot --output state.json
+
+# 계정 상태 diff
+movement state diff --before snapshot1.json --after snapshot2.json
+
+# 리소스 변경 추적
+movement state track-resource --address 0x1 --resource Coin
+```
+
+## ⚙️ 8. 고급 설정 관리
+
+### 설정 프로필 관리
+```bash
+# 개발 프로필 생성
+movement config create-profile dev \
+    --network testnet \
+    --default-account alice-dev \
+    --gas-limit 100000
+
+# 프로덕션 프로필
+movement config create-profile prod \
+    --network mainnet \
+    --default-account alice-prod \
+    --gas-limit 50000
+
+# 프로필 전환
+movement config use-profile dev
+movement config use-profile prod
+
+# 프로필별 명령어 실행
+movement --profile dev move test
+movement --profile prod move publish
+```
+
+### 환경변수 활용
+```bash
+# 환경변수로 설정 오버라이드
+export MOVEMENT_NETWORK=testnet
+export MOVEMENT_ACCOUNT=alice-test
+export MOVEMENT_GAS_LIMIT=200000
+
+# 설정 파일 경로 커스터마이징
+export MOVEMENT_CONFIG_PATH=~/.movement-custom/
+export MOVEMENT_CACHE_PATH=/tmp/movement-cache/
+
+# 개발 모드 활성화
+export MOVEMENT_DEV_MODE=1
+export MOVEMENT_VERBOSE=1
+```
+
+## 📈 9. 성능 모니터링과 최적화
+
+### 빌드 성능 모니터링
+```bash
+# 빌드 시간 측정
+time movement move build --workspace
+
+# 빌드 프로파일링
+movement move build --profile --output build-profile.json
+
+# 캐시 히트율 확인
+movement move build --cache-stats
+
+# 의존성 빌드 시간 분석
+movement move build --deps-timing
+```
+
+### 런타임 성능 모니터링
+```bash
+# 함수 실행 시간 측정
+movement move profile-function \
+    --function "0x1::coin::mint" \
+    --args "address:0x2,u64:1000"
+
+# 메모리 사용량 프로파일링
+movement move profile-memory --workspace
+
+# 네트워크 성능 측정
+movement network benchmark \
+    --transactions 1000 \
+    --concurrent-requests 10
+```
+
+## 🔧 10. 커스텀 도구 개발
+
+### CLI 확장 스크립트
+```bash
+#!/bin/bash
+# ~/.movement/scripts/deploy-stack.sh
+# movement deploy-stack 명령어로 실행 가능
+
+echo "=== Full Stack 배포 ==="
+
+# 스마트 계약 배포
+movement move publish --account-name contracts-deployer
+
+# 프론트엔드 배포 트리거
+curl -X POST https://api.vercel.com/v1/deployments \
+    -H "Authorization: Bearer $VERCEL_TOKEN" \
+    -d '{"name": "my-dapp-frontend"}'
+
+# 백엔드 서비스 재시작
+kubectl rollout restart deployment/api-server
+
+echo "Full Stack 배포 완료!"
+```
+
+### 커스텀 명령어 등록
+```bash
+# ~/.movement/config.toml
+[custom-commands]
+deploy-stack = "~/.movement/scripts/deploy-stack.sh"
+quick-test = "movement move test --parallel --coverage"
+full-analysis = "movement move analyze --all && movement security-scan"
+
+# 사용법
+movement deploy-stack
+movement quick-test  
+movement full-analysis
+```
+
+## 🎯 11. 마스터 워크플로우 예시
+
+### 완전 자동화된 개발 워크플로우
+```bash
+#!/bin/bash
+# scripts/master-workflow.sh
+
+set -euo pipefail
+
+PROJECT_ROOT=$(pwd)
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+
+echo "=== Movement 마스터 워크플로우 시작 ==="
+
+# 1. 환경 검증
+movement config validate || exit 1
+
+# 2. 의존성 업데이트 체크
+movement move deps --check-updates --auto-update
+
+# 3. 코드 품질 검사
+echo "코드 품질 검사 중..."
+movement move check --workspace
+movement move analyze --comprehensive
+
+# 4. 병렬 테스트 실행
+echo "테스트 실행 중..."
+movement move test --workspace --parallel --coverage \
+    --output-file "reports/test-${TIMESTAMP}.json"
+
+# 5. 성능 벤치마크
+echo "성능 벤치마크 실행 중..."
+movement move benchmark --workspace \
+    --output-file "reports/benchmark-${TIMESTAMP}.json"
+
+# 6. 보안 스캔
+echo "보안 스캔 중..."
+movement move security-scan --comprehensive \
+    --output-file "reports/security-${TIMESTAMP}.json"
+
+# 7. 빌드 최적화
+echo "최적화된 빌드 중..."
+movement move build --workspace --release --optimize-level 3
+
+# 8. 배포 준비 검증
+echo "배포 준비 상태 확인 중..."
+movement move publish --simulate --workspace
+
+# 9. 리포트 생성
+echo "리포트 생성 중..."
+./scripts/generate-report.sh "${TIMESTAMP}"
+
+echo "=== 워크플로우 완료! ==="
+echo "리포트: reports/summary-${TIMESTAMP}.html"
+```
+
+## 🔗 다음 단계
+
+CLI 고급 기능을 마스터했다면:
+
+**[VS Code 확장 & 설정 →](/developer-tools/vscode-setup)**
+
+## 📚 참고 자료
+
+- [Movement 개발자 포털](https://developer.movementnetwork.xyz/)
+- [Movement 공식 문서](https://docs.movementnetwork.xyz/)
+- [Movement CLI GitHub](https://github.com/movementlabsxyz/aptos-core)
+
+---
+
+*CLI를 마스터하면 모든 개발 작업이 자동화됩니다! ⚡🚀*

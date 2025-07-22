@@ -1,0 +1,372 @@
+# ⚠️ 상수와 에러 처리 (Constants & Error Handling)
+
+안정적이고 유지보수 가능한 Move 코드를 작성하기 위한 상수 선언과 에러 처리 방법을 학습합니다.
+
+## 📏 상수 (Constants)
+
+상수는 컴파일 타임에 결정되는 불변 값입니다. 코드의 가독성과 유지보수성을 크게 향상시킵니다.
+
+### 기본 상수 선언
+```move
+module movement::constants_example {
+    // 일반 상수 - 대문자 스네이크 케이스
+    const MAX_SUPPLY: u64 = 1000000;
+    const MIN_BALANCE: u64 = 100;
+    const PLATFORM_FEE_RATE: u64 = 250; // 2.5% (기준점 10000)
+    
+    // 문자열 상수
+    const TOKEN_NAME: vector<u8> = b"Movement Token";
+    const VERSION: vector<u8> = b"1.0.0";
+    
+    public fun get_max_supply(): u64 {
+        MAX_SUPPLY
+    }
+}
+```
+
+### 에러 코드 상수
+에러 코드는 특별한 네이밍 규칙을 따릅니다:
+
+```move
+module movement::error_constants {
+    // 에러 코드 - 카멜케이스 + E 접두어
+    const EInsufficientBalance: u64 = 1;
+    const ENotAuthorized: u64 = 2;
+    const ETokenNotFound: u64 = 3;
+    const EExceedsMaxSupply: u64 = 4;
+    const EInvalidAddress: u64 = 5;
+    
+    // 16진수로도 정의 가능 (더 체계적)
+    const E_MINT_BEYOND: u64 = 0x00001;
+    const E_INVALID_ADDRESS: u64 = 0x00002;
+    const E_NOT_ADMIN: u64 = 0x00003;
+}
+```
+
+## 🚨 기본 에러 처리
+
+### abort 문
+즉시 실행을 중단하고 에러 코드를 반환합니다:
+
+```move
+module movement::basic_errors {
+    const EInsufficientFunds: u64 = 1;
+    const ENotOwner: u64 = 2;
+    
+    public fun withdraw(balance: u64, amount: u64, is_owner: bool) {
+        // 권한 확인
+        if (!is_owner) {
+            abort ENotOwner
+        };
+        
+        // 잔액 확인  
+        if (balance < amount) {
+            abort EInsufficientFunds
+        };
+        
+        // 정상 처리 로직...
+    }
+}
+```
+
+### assert! 매크로
+조건을 확인하고 실패시 abort합니다:
+
+```move
+module movement::assert_examples {
+    const EInvalidAmount: u64 = 1;
+    const EZeroAddress: u64 = 2;
+    
+    public fun transfer(from: address, to: address, amount: u64) {
+        // assert!(조건, 에러_코드)
+        assert!(amount > 0, EInvalidAmount);
+        assert!(to != @0x0, EZeroAddress);
+        
+        // 전송 로직 실행...
+    }
+    
+    // 복합 조건 검사
+    public fun mint_token(admin: address, recipient: address, amount: u64) {
+        assert!(admin == @movement, ENotOwner);
+        assert!(recipient != @0x0, EZeroAddress);  
+        assert!(amount > 0 && amount <= 1000000, EInvalidAmount);
+        
+        // 민팅 로직...
+    }
+}
+```
+
+## 🎯 고급 에러 처리 패턴
+
+### 에러 코드 모듈 분리
+```move
+// errors.move 파일
+module movement::errors {
+    // 공통 에러 코드들
+    const ENotEven: u64 = 2;
+    const ENotAuthorized: u64 = 100;
+    const EInsufficientBalance: u64 = 101;
+    const EInvalidInput: u64 = 102;
+    
+    // Getter 함수들 (재사용을 위해)
+    public fun not_even(): u64 { ENotEven }
+    public fun not_authorized(): u64 { ENotAuthorized }
+    public fun insufficient_balance(): u64 { EInsufficientBalance }
+    public fun invalid_input(): u64 { EInvalidInput }
+}
+
+// 다른 모듈에서 사용
+module movement::token {
+    use movement::errors;
+    
+    public fun transfer(amount: u64, balance: u64) {
+        assert!(amount <= balance, errors::insufficient_balance());
+        assert!(amount > 0, errors::invalid_input());
+        
+        // 전송 로직...
+    }
+}
+```
+
+### 상세한 에러 검증
+```move
+module movement::validation {
+    const EInvalidTokenId: u64 = 1;
+    const ETokenNotOwned: u64 = 2;
+    const EInsufficientApproval: u64 = 3;
+    
+    struct TokenInfo has store {
+        owner: address,
+        approved: address,
+        metadata: vector<u8>,
+    }
+    
+    public fun validate_transfer(
+        token_id: u64,
+        sender: address,
+        token_info: &TokenInfo
+    ) {
+        // 토큰 존재 여부
+        assert!(token_id > 0, EInvalidTokenId);
+        
+        // 소유권 또는 승인 확인
+        let is_owner = sender == token_info.owner;
+        let is_approved = sender == token_info.approved;
+        
+        assert!(is_owner || is_approved, ETokenNotOwned);
+    }
+}
+```
+
+## 💰 실전 예제: DeFi 에러 처리
+
+```move
+module movement::defi_errors {
+    use std::signer;
+    
+    // DeFi 관련 에러 코드들
+    const EInsufficientLiquidity: u64 = 1;
+    const ESlippageExceeded: u64 = 2;
+    const EPairNotExists: u64 = 3;
+    const EInvalidRatio: u64 = 4;
+    const EPoolNotInitialized: u64 = 5;
+    
+    struct LiquidityPool has store {
+        token_a_reserve: u64,
+        token_b_reserve: u64,
+        total_supply: u64,
+    }
+    
+    // 스왑 함수 - 포괄적인 에러 검사
+    public fun swap_tokens(
+        pool: &mut LiquidityPool,
+        input_amount: u64,
+        min_output: u64,
+        user: &signer
+    ): u64 {
+        // 입력 검증
+        assert!(input_amount > 0, EInvalidRatio);
+        assert!(pool.token_a_reserve > 0 && pool.token_b_reserve > 0, EPoolNotInitialized);
+        
+        // 출력량 계산
+        let output_amount = calculate_output(
+            input_amount,
+            pool.token_a_reserve,
+            pool.token_b_reserve
+        );
+        
+        // 충분한 유동성 확인
+        assert!(output_amount <= pool.token_b_reserve, EInsufficientLiquidity);
+        
+        // 슬리페지 확인
+        assert!(output_amount >= min_output, ESlippageExceeded);
+        
+        // 풀 상태 업데이트
+        pool.token_a_reserve = pool.token_a_reserve + input_amount;
+        pool.token_b_reserve = pool.token_b_reserve - output_amount;
+        
+        output_amount
+    }
+    
+    fun calculate_output(input: u64, reserve_in: u64, reserve_out: u64): u64 {
+        let numerator = input * reserve_out;
+        let denominator = reserve_in + input;
+        numerator / denominator
+    }
+}
+```
+
+## 🎮 실전 예제: NFT 에러 처리
+
+```move
+module movement::nft_errors {
+    use std::string::String;
+    use std::vector;
+    
+    // NFT 관련 에러 코드
+    const ETokenNotExists: u64 = 1;
+    const ENotOwner: u64 = 2;
+    const ENotApproved: u64 = 3;
+    const EInvalidMetadata: u64 = 4;
+    const ECollectionFull: u64 = 5;
+    const ESelfTransfer: u64 = 6;
+    
+    struct NFT has store {
+        id: u64,
+        owner: address,
+        metadata: String,
+        approved: address,
+    }
+    
+    struct Collection has key {
+        nfts: vector<NFT>,
+        max_supply: u64,
+    }
+    
+    // NFT 전송 - 모든 검증 포함
+    public fun transfer_nft(
+        collection: &mut Collection,
+        token_id: u64,
+        from: address,
+        to: address,
+        sender: address
+    ) {
+        // 기본 검증
+        assert!(token_id > 0, ETokenNotExists);
+        assert!(from != to, ESelfTransfer);
+        assert!(to != @0x0, EInvalidMetadata); // 0 주소로 전송 금지
+        
+        // NFT 찾기
+        let nft_index = find_nft_index(&collection.nfts, token_id);
+        assert!(nft_index < vector::length(&collection.nfts), ETokenNotExists);
+        
+        let nft_ref = vector::borrow(&collection.nfts, nft_index);
+        
+        // 권한 확인
+        let is_owner = sender == nft_ref.owner;
+        let is_approved = sender == nft_ref.approved;
+        assert!(is_owner || is_approved, ENotApproved);
+        
+        // 실제 owner 확인
+        assert!(nft_ref.owner == from, ENotOwner);
+        
+        // 전송 실행
+        let nft_mut = vector::borrow_mut(&mut collection.nfts, nft_index);
+        nft_mut.owner = to;
+        nft_mut.approved = @0x0; // 승인 초기화
+    }
+    
+    // 민팅 - 공급량 제한 확인
+    public fun mint_nft(
+        collection: &mut Collection,
+        to: address,
+        metadata: String
+    ): u64 {
+        let current_supply = vector::length(&collection.nfts);
+        assert!(current_supply < collection.max_supply, ECollectionFull);
+        assert!(to != @0x0, EInvalidMetadata);
+        
+        let token_id = current_supply + 1;
+        let nft = NFT {
+            id: token_id,
+            owner: to,
+            metadata,
+            approved: @0x0,
+        };
+        
+        vector::push_back(&mut collection.nfts, nft);
+        token_id
+    }
+    
+    fun find_nft_index(nfts: &vector<NFT>, token_id: u64): u64 {
+        let len = vector::length(nfts);
+        let i = 0;
+        
+        while (i < len) {
+            let nft = vector::borrow(nfts, i);
+            if (nft.id == token_id) {
+                return i
+            };
+            i = i + 1;
+        };
+        
+        len // Not found
+    }
+}
+```
+
+## 🛡️ 모범 사례
+
+### 1. 에러 코드 체계화
+```move
+module movement::error_system {
+    // 카테고리별로 에러 코드 그룹화
+    
+    // 권한 관련 (100번대)
+    const E_NOT_ADMIN: u64 = 100;
+    const E_NOT_OWNER: u64 = 101;
+    const E_NOT_AUTHORIZED: u64 = 102;
+    
+    // 입력 검증 관련 (200번대)  
+    const E_INVALID_AMOUNT: u64 = 200;
+    const E_INVALID_ADDRESS: u64 = 201;
+    const E_INVALID_PARAMETER: u64 = 202;
+    
+    // 상태 관련 (300번대)
+    const E_INSUFFICIENT_BALANCE: u64 = 300;
+    const E_ALREADY_EXISTS: u64 = 301;
+    const E_NOT_FOUND: u64 = 302;
+}
+```
+
+### 2. 입력 검증 함수화
+```move
+module movement::validation_utils {
+    const E_INVALID_ADDRESS: u64 = 1;
+    const E_INVALID_AMOUNT: u64 = 2;
+    
+    public fun validate_address(addr: address) {
+        assert!(addr != @0x0, E_INVALID_ADDRESS);
+    }
+    
+    public fun validate_amount(amount: u64, min: u64, max: u64) {
+        assert!(amount >= min && amount <= max, E_INVALID_AMOUNT);
+    }
+}
+```
+
+## 🔗 다음 단계
+
+상수와 에러 처리를 배웠다면:
+- [제네릭과 팬텀 타입](/basic-concepts/generics-phantom) - 재사용 가능한 코드
+- [단위 테스트](/basic-concepts/unit-testing) - 코드 품질 보장
+
+## 📚 참고 자료
+
+- [Movement 개발자 포털](https://developer.movementnetwork.xyz/)
+- [Movement 공식 문서](https://docs.movementnetwork.xyz/)
+- [제어 구조](/basic-concepts/control-structures)
+
+---
+
+*적절한 에러 처리는 사용자 경험과 코드 안정성을 크게 향상시킵니다! 🛡️*

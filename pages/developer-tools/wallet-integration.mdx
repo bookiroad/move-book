@@ -1,0 +1,846 @@
+# 💳 Wallet 연동 도구 (Razor, Nightly & More)
+
+Movement Network과 호환되는 다양한 지갑들의 연동 방법을 알아보겠습니다. 사용자 경험을 극대화하는 지갑 통합 전략을 다룹니다.
+
+## 🎯 학습 목표
+
+이 섹션을 완료하면:
+- 주요 Movement 지갑들과 연동할 수 있습니다
+- 멀티 지갑 지원 dApp을 개발할 수 있습니다
+- 지갑별 특징과 최적화 방법을 이해할 수 있습니다
+- 안전한 지갑 연동 패턴을 구현할 수 있습니다
+
+## 📊 지원 지갑 비교
+
+| 지갑 | 타입 | 플랫폼 | Movement 지원 | 특징 |
+|------|------|--------|---------------|------|
+| **Razor Wallet** | 브라우저 확장 | Web | ✅ 네이티브 | 고성능, DEX 특화 |
+| **Nightly** | 브라우저 확장 | Web | ✅ 네이티브 | 멀티체인, NFT 지원 |
+| **Movement Wallet** | 모바일 | iOS/Android | ✅ 공식 | Movement 전용 |
+| **Pontem** | 브라우저 확장 | Web | ✅ 호환 | Move 언어 특화 |
+| **WalletConnect** | 프로토콜 | Universal | ✅ 지원 | 크로스 플랫폼 |
+
+## 🔧 1. Razor Wallet 연동
+
+### 기본 설치 및 감지
+```typescript
+// utils/razorWallet.ts
+interface RazorWallet {
+    connect(): Promise<string[]>;
+    disconnect(): Promise<void>;
+    signAndSubmitTransaction(transaction: any): Promise<any>;
+    signMessage(message: string): Promise<string>;
+    account(): string | null;
+    network(): string;
+}
+
+declare global {
+    interface Window {
+        razor?: RazorWallet;
+    }
+}
+
+export class RazorWalletAdapter {
+    private wallet: RazorWallet | null = null;
+    
+    constructor() {
+        this.checkWalletAvailability();
+    }
+    
+    private checkWalletAvailability(): void {
+        if (typeof window !== 'undefined' && window.razor) {
+            this.wallet = window.razor;
+            console.log('Razor Wallet 감지됨');
+        } else {
+            console.log('Razor Wallet이 설치되어 있지 않습니다');
+        }
+    }
+    
+    async connect(): Promise<string | null> {
+        if (!this.wallet) {
+            throw new Error('Razor Wallet이 설치되어 있지 않습니다');
+        }
+        
+        try {
+            const accounts = await this.wallet.connect();
+            return accounts[0] || null;
+        } catch (error) {
+            console.error('Razor Wallet 연결 실패:', error);
+            throw error;
+        }
+    }
+    
+    async disconnect(): Promise<void> {
+        if (this.wallet) {
+            await this.wallet.disconnect();
+        }
+    }
+    
+    async signAndSubmitTransaction(transaction: any): Promise<string> {
+        if (!this.wallet) {
+            throw new Error('지갑이 연결되지 않았습니다');
+        }
+        
+        try {
+            const result = await this.wallet.signAndSubmitTransaction(transaction);
+            return result.hash;
+        } catch (error) {
+            console.error('트랜잭션 실행 실패:', error);
+            throw error;
+        }
+    }
+    
+    getCurrentAccount(): string | null {
+        return this.wallet?.account() || null;
+    }
+    
+    getCurrentNetwork(): string {
+        return this.wallet?.network() || 'unknown';
+    }
+}
+```
+
+### React Hook 구현
+```typescript
+// hooks/useRazorWallet.ts
+import { useState, useEffect, useCallback } from 'react';
+import { RazorWalletAdapter } from '../utils/razorWallet';
+
+export const useRazorWallet = () => {
+    const [wallet] = useState(() => new RazorWalletAdapter());
+    const [account, setAccount] = useState<string | null>(null);
+    const [connected, setConnected] = useState(false);
+    const [connecting, setConnecting] = useState(false);
+    
+    const connect = useCallback(async () => {
+        setConnecting(true);
+        try {
+            const address = await wallet.connect();
+            setAccount(address);
+            setConnected(!!address);
+        } catch (error) {
+            console.error('연결 실패:', error);
+        } finally {
+            setConnecting(false);
+        }
+    }, [wallet]);
+    
+    const disconnect = useCallback(async () => {
+        try {
+            await wallet.disconnect();
+            setAccount(null);
+            setConnected(false);
+        } catch (error) {
+            console.error('연결 해제 실패:', error);
+        }
+    }, [wallet]);
+    
+    const sendTransaction = useCallback(async (transaction: any) => {
+        if (!connected) {
+            throw new Error('지갑이 연결되지 않았습니다');
+        }
+        
+        return await wallet.signAndSubmitTransaction(transaction);
+    }, [wallet, connected]);
+    
+    useEffect(() => {
+        const currentAccount = wallet.getCurrentAccount();
+        if (currentAccount) {
+            setAccount(currentAccount);
+            setConnected(true);
+        }
+    }, [wallet]);
+    
+    return {
+        wallet,
+        account,
+        connected,
+        connecting,
+        connect,
+        disconnect,
+        sendTransaction
+    };
+};
+```
+
+## 🌙 2. Nightly Wallet 연동
+
+### Nightly 어댑터
+```typescript
+// utils/nightlyWallet.ts
+interface NightlyWallet {
+    connect(): Promise<{ address: string; publicKey: string }>;
+    disconnect(): Promise<void>;
+    signAndSubmitTransaction(payload: any): Promise<any>;
+    signMessage(message: Uint8Array): Promise<{ signature: string }>;
+    isConnected(): boolean;
+    getAccount(): { address: string } | null;
+}
+
+declare global {
+    interface Window {
+        nightly?: {
+            movement?: NightlyWallet;
+        };
+    }
+}
+
+export class NightlyWalletAdapter {
+    private wallet: NightlyWallet | null = null;
+    
+    constructor() {
+        this.initializeWallet();
+    }
+    
+    private async initializeWallet(): Promise<void> {
+        // Nightly는 lazy loading을 사용할 수 있음
+        if (typeof window !== 'undefined') {
+            await this.waitForNightly();
+        }
+    }
+    
+    private async waitForNightly(timeout: number = 3000): Promise<void> {
+        return new Promise((resolve, reject) => {
+            if (window.nightly?.movement) {
+                this.wallet = window.nightly.movement;
+                resolve();
+                return;
+            }
+            
+            const interval = setInterval(() => {
+                if (window.nightly?.movement) {
+                    this.wallet = window.nightly.movement;
+                    clearInterval(interval);
+                    clearTimeout(timeoutId);
+                    resolve();
+                }
+            }, 100);
+            
+            const timeoutId = setTimeout(() => {
+                clearInterval(interval);
+                reject(new Error('Nightly Wallet 로드 타임아웃'));
+            }, timeout);
+        });
+    }
+    
+    async connect(): Promise<string> {
+        if (!this.wallet) {
+            throw new Error('Nightly Wallet을 사용할 수 없습니다');
+        }
+        
+        try {
+            const result = await this.wallet.connect();
+            return result.address;
+        } catch (error) {
+            console.error('Nightly Wallet 연결 실패:', error);
+            throw error;
+        }
+    }
+    
+    async disconnect(): Promise<void> {
+        if (this.wallet) {
+            await this.wallet.disconnect();
+        }
+    }
+    
+    async signAndSubmitTransaction(payload: any): Promise<string> {
+        if (!this.wallet || !this.wallet.isConnected()) {
+            throw new Error('지갑이 연결되지 않았습니다');
+        }
+        
+        try {
+            const result = await this.wallet.signAndSubmitTransaction(payload);
+            return result.hash;
+        } catch (error) {
+            console.error('트랜잭션 실행 실패:', error);
+            throw error;
+        }
+    }
+    
+    isConnected(): boolean {
+        return this.wallet?.isConnected() || false;
+    }
+    
+    getCurrentAccount(): string | null {
+        const account = this.wallet?.getAccount();
+        return account?.address || null;
+    }
+}
+```
+
+## 🔗 3. WalletConnect 통합
+
+### WalletConnect v2 구현
+```typescript
+// utils/walletConnect.ts
+import { SignClient } from '@walletconnect/sign-client';
+import { SessionTypes } from '@walletconnect/types';
+
+export class WalletConnectAdapter {
+    private signClient: SignClient | null = null;
+    private session: SessionTypes.Struct | null = null;
+    
+    async initialize(): Promise<void> {
+        this.signClient = await SignClient.init({
+            projectId: process.env.REACT_APP_WALLETCONNECT_PROJECT_ID!,
+            metadata: {
+                name: 'Movement dApp',
+                description: 'Movement Network dApp',
+                url: window.location.origin,
+                icons: ['https://your-app.com/icon.png']
+            }
+        });
+        
+        // 기존 세션 복구
+        const sessions = this.signClient.session.getAll();
+        if (sessions.length > 0) {
+            this.session = sessions[0];
+        }
+    }
+    
+    async connect(): Promise<string> {
+        if (!this.signClient) {
+            throw new Error('WalletConnect가 초기화되지 않았습니다');
+        }
+        
+        try {
+            const { uri, approval } = await this.signClient.connect({
+                requiredNamespaces: {
+                    movement: {
+                        methods: [
+                            'movement_signAndSubmitTransaction',
+                            'movement_signMessage'
+                        ],
+                        chains: ['movement:testnet', 'movement:mainnet'],
+                        events: ['accountsChanged', 'chainChanged']
+                    }
+                }
+            });
+            
+            if (uri) {
+                // QR 코드 또는 딥링크로 URI 표시
+                this.showConnectionURI(uri);
+            }
+            
+            this.session = await approval();
+            const accounts = this.session.namespaces.movement.accounts;
+            
+            return accounts[0].split(':')[2]; // 주소 추출
+        } catch (error) {
+            console.error('WalletConnect 연결 실패:', error);
+            throw error;
+        }
+    }
+    
+    async disconnect(): Promise<void> {
+        if (this.signClient && this.session) {
+            await this.signClient.disconnect({
+                topic: this.session.topic,
+                reason: {
+                    code: 6000,
+                    message: 'User disconnected'
+                }
+            });
+            this.session = null;
+        }
+    }
+    
+    async signAndSubmitTransaction(transaction: any): Promise<string> {
+        if (!this.signClient || !this.session) {
+            throw new Error('세션이 없습니다');
+        }
+        
+        try {
+            const result = await this.signClient.request({
+                topic: this.session.topic,
+                chainId: 'movement:testnet',
+                request: {
+                    method: 'movement_signAndSubmitTransaction',
+                    params: [transaction]
+                }
+            });
+            
+            return result.hash;
+        } catch (error) {
+            console.error('트랜잭션 실행 실패:', error);
+            throw error;
+        }
+    }
+    
+    private showConnectionURI(uri: string): void {
+        // QR 코드 생성 및 표시 로직
+        // 또는 모바일 딥링크 처리
+        console.log('WalletConnect URI:', uri);
+    }
+}
+```
+
+## 🎯 4. 통합 지갑 관리자
+
+### 멀티 지갑 어댑터
+```typescript
+// utils/walletManager.ts
+export enum WalletType {
+    RAZOR = 'razor',
+    NIGHTLY = 'nightly',
+    WALLETCONNECT = 'walletconnect',
+    MOVEMENT_MOBILE = 'movement-mobile'
+}
+
+interface BaseWallet {
+    connect(): Promise<string>;
+    disconnect(): Promise<void>;
+    signAndSubmitTransaction(transaction: any): Promise<string>;
+    isConnected(): boolean;
+    getCurrentAccount(): string | null;
+}
+
+export class UniversalWalletManager {
+    private adapters: Map<WalletType, BaseWallet> = new Map();
+    private currentWallet: WalletType | null = null;
+    
+    constructor() {
+        this.initializeAdapters();
+    }
+    
+    private initializeAdapters(): void {
+        this.adapters.set(WalletType.RAZOR, new RazorWalletAdapter());
+        this.adapters.set(WalletType.NIGHTLY, new NightlyWalletAdapter());
+        this.adapters.set(WalletType.WALLETCONNECT, new WalletConnectAdapter());
+    }
+    
+    getAvailableWallets(): WalletType[] {
+        const available: WalletType[] = [];
+        
+        if (window.razor) available.push(WalletType.RAZOR);
+        if (window.nightly?.movement) available.push(WalletType.NIGHTLY);
+        available.push(WalletType.WALLETCONNECT); // 항상 사용 가능
+        
+        return available;
+    }
+    
+    async connect(walletType: WalletType): Promise<string> {
+        const adapter = this.adapters.get(walletType);
+        if (!adapter) {
+            throw new Error(`지원하지 않는 지갑: ${walletType}`);
+        }
+        
+        try {
+            const address = await adapter.connect();
+            this.currentWallet = walletType;
+            
+            // 지갑 선택 저장
+            localStorage.setItem('selectedWallet', walletType);
+            
+            return address;
+        } catch (error) {
+            console.error(`${walletType} 연결 실패:`, error);
+            throw error;
+        }
+    }
+    
+    async disconnect(): Promise<void> {
+        if (this.currentWallet) {
+            const adapter = this.adapters.get(this.currentWallet);
+            if (adapter) {
+                await adapter.disconnect();
+            }
+            
+            this.currentWallet = null;
+            localStorage.removeItem('selectedWallet');
+        }
+    }
+    
+    async signAndSubmitTransaction(transaction: any): Promise<string> {
+        if (!this.currentWallet) {
+            throw new Error('연결된 지갑이 없습니다');
+        }
+        
+        const adapter = this.adapters.get(this.currentWallet);
+        if (!adapter) {
+            throw new Error('지갑 어댑터를 찾을 수 없습니다');
+        }
+        
+        return await adapter.signAndSubmitTransaction(transaction);
+    }
+    
+    isConnected(): boolean {
+        if (!this.currentWallet) return false;
+        
+        const adapter = this.adapters.get(this.currentWallet);
+        return adapter?.isConnected() || false;
+    }
+    
+    getCurrentAccount(): string | null {
+        if (!this.currentWallet) return null;
+        
+        const adapter = this.adapters.get(this.currentWallet);
+        return adapter?.getCurrentAccount() || null;
+    }
+    
+    getCurrentWalletType(): WalletType | null {
+        return this.currentWallet;
+    }
+    
+    async autoReconnect(): Promise<boolean> {
+        const savedWallet = localStorage.getItem('selectedWallet') as WalletType;
+        
+        if (savedWallet && this.getAvailableWallets().includes(savedWallet)) {
+            try {
+                await this.connect(savedWallet);
+                return true;
+            } catch (error) {
+                console.error('자동 재연결 실패:', error);
+                localStorage.removeItem('selectedWallet');
+            }
+        }
+        
+        return false;
+    }
+}
+```
+
+### React Context Provider
+```typescript
+// contexts/WalletContext.tsx
+import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { UniversalWalletManager, WalletType } from '../utils/walletManager';
+
+interface WalletContextType {
+    walletManager: UniversalWalletManager;
+    account: string | null;
+    connected: boolean;
+    connecting: boolean;
+    availableWallets: WalletType[];
+    currentWalletType: WalletType | null;
+    connect: (walletType: WalletType) => Promise<void>;
+    disconnect: () => Promise<void>;
+    sendTransaction: (transaction: any) => Promise<string>;
+}
+
+const WalletContext = createContext<WalletContextType | undefined>(undefined);
+
+interface WalletProviderProps {
+    children: ReactNode;
+}
+
+export const WalletProvider: React.FC<WalletProviderProps> = ({ children }) => {
+    const [walletManager] = useState(() => new UniversalWalletManager());
+    const [account, setAccount] = useState<string | null>(null);
+    const [connected, setConnected] = useState(false);
+    const [connecting, setConnecting] = useState(false);
+    const [availableWallets, setAvailableWallets] = useState<WalletType[]>([]);
+    const [currentWalletType, setCurrentWalletType] = useState<WalletType | null>(null);
+    
+    const connect = async (walletType: WalletType) => {
+        setConnecting(true);
+        try {
+            const address = await walletManager.connect(walletType);
+            setAccount(address);
+            setConnected(true);
+            setCurrentWalletType(walletType);
+        } catch (error) {
+            console.error('지갑 연결 실패:', error);
+            throw error;
+        } finally {
+            setConnecting(false);
+        }
+    };
+    
+    const disconnect = async () => {
+        try {
+            await walletManager.disconnect();
+            setAccount(null);
+            setConnected(false);
+            setCurrentWalletType(null);
+        } catch (error) {
+            console.error('지갑 연결 해제 실패:', error);
+            throw error;
+        }
+    };
+    
+    const sendTransaction = async (transaction: any): Promise<string> => {
+        return await walletManager.signAndSubmitTransaction(transaction);
+    };
+    
+    useEffect(() => {
+        const initializeWallets = async () => {
+            // 사용 가능한 지갑 감지
+            setAvailableWallets(walletManager.getAvailableWallets());
+            
+            // 자동 재연결 시도
+            const reconnected = await walletManager.autoReconnect();
+            if (reconnected) {
+                setAccount(walletManager.getCurrentAccount());
+                setConnected(walletManager.isConnected());
+                setCurrentWalletType(walletManager.getCurrentWalletType());
+            }
+        };
+        
+        initializeWallets();
+    }, [walletManager]);
+    
+    const value: WalletContextType = {
+        walletManager,
+        account,
+        connected,
+        connecting,
+        availableWallets,
+        currentWalletType,
+        connect,
+        disconnect,
+        sendTransaction
+    };
+    
+    return (
+        <WalletContext.Provider value={value}>
+            {children}
+        </WalletContext.Provider>
+    );
+};
+
+export const useWallet = (): WalletContextType => {
+    const context = useContext(WalletContext);
+    if (!context) {
+        throw new Error('useWallet은 WalletProvider 내에서 사용해야 합니다');
+    }
+    return context;
+};
+```
+
+## 🎨 5. UI 컴포넌트
+
+### 지갑 선택 모달
+```typescript
+// components/WalletModal.tsx
+import React, { useState } from 'react';
+import { useWallet } from '../contexts/WalletContext';
+import { WalletType } from '../utils/walletManager';
+
+interface WalletModalProps {
+    isOpen: boolean;
+    onClose: () => void;
+}
+
+const walletInfo = {
+    [WalletType.RAZOR]: {
+        name: 'Razor Wallet',
+        icon: '/icons/razor.png',
+        description: 'Movement 네이티브 지갑'
+    },
+    [WalletType.NIGHTLY]: {
+        name: 'Nightly',
+        icon: '/icons/nightly.png', 
+        description: '멀티체인 지갑'
+    },
+    [WalletType.WALLETCONNECT]: {
+        name: 'WalletConnect',
+        icon: '/icons/walletconnect.png',
+        description: '모바일 지갑 연결'
+    }
+};
+
+export const WalletModal: React.FC<WalletModalProps> = ({ isOpen, onClose }) => {
+    const { connect, availableWallets, connecting } = useWallet();
+    const [selectedWallet, setSelectedWallet] = useState<WalletType | null>(null);
+    
+    if (!isOpen) return null;
+    
+    const handleConnect = async (walletType: WalletType) => {
+        setSelectedWallet(walletType);
+        try {
+            await connect(walletType);
+            onClose();
+        } catch (error) {
+            console.error('연결 실패:', error);
+        } finally {
+            setSelectedWallet(null);
+        }
+    };
+    
+    return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg p-6 w-96 max-w-sm mx-4">
+                <div className="flex justify-between items-center mb-4">
+                    <h2 className="text-xl font-bold">지갑 연결</h2>
+                    <button 
+                        onClick={onClose}
+                        className="text-gray-500 hover:text-gray-700"
+                    >
+                        ✕
+                    </button>
+                </div>
+                
+                <div className="space-y-3">
+                    {availableWallets.map((walletType) => {
+                        const info = walletInfo[walletType];
+                        const isLoading = connecting && selectedWallet === walletType;
+                        
+                        return (
+                            <button
+                                key={walletType}
+                                onClick={() => handleConnect(walletType)}
+                                disabled={connecting}
+                                className="w-full flex items-center p-4 border rounded-lg hover:bg-gray-50 disabled:opacity-50"
+                            >
+                                <img 
+                                    src={info.icon} 
+                                    alt={info.name}
+                                    className="w-8 h-8 mr-3"
+                                />
+                                <div className="flex-1 text-left">
+                                    <div className="font-medium">{info.name}</div>
+                                    <div className="text-sm text-gray-500">
+                                        {info.description}
+                                    </div>
+                                </div>
+                                {isLoading && (
+                                    <div className="ml-2">
+                                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+                                    </div>
+                                )}
+                            </button>
+                        );
+                    })}
+                </div>
+                
+                {availableWallets.length === 0 && (
+                    <div className="text-center text-gray-500 py-8">
+                        지원하는 지갑이 설치되어 있지 않습니다.
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+};
+```
+
+### 지갑 연결 버튼
+```typescript
+// components/ConnectButton.tsx
+import React, { useState } from 'react';
+import { useWallet } from '../contexts/WalletContext';
+import { WalletModal } from './WalletModal';
+
+export const ConnectButton: React.FC = () => {
+    const { connected, account, disconnect, currentWalletType } = useWallet();
+    const [modalOpen, setModalOpen] = useState(false);
+    const [dropdownOpen, setDropdownOpen] = useState(false);
+    
+    if (connected && account) {
+        return (
+            <div className="relative">
+                <button
+                    onClick={() => setDropdownOpen(!dropdownOpen)}
+                    className="flex items-center space-x-2 bg-green-100 text-green-800 px-4 py-2 rounded-lg"
+                >
+                    <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                    <span className="font-medium">
+                        {`${account.slice(0, 6)}...${account.slice(-4)}`}
+                    </span>
+                    <span className="text-xs text-green-600">
+                        {currentWalletType}
+                    </span>
+                </button>
+                
+                {dropdownOpen && (
+                    <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg z-10">
+                        <div className="py-1">
+                            <button
+                                onClick={() => navigator.clipboard.writeText(account)}
+                                className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 w-full text-left"
+                            >
+                                주소 복사
+                            </button>
+                            <button
+                                onClick={disconnect}
+                                className="block px-4 py-2 text-sm text-red-700 hover:bg-red-50 w-full text-left"
+                            >
+                                연결 해제
+                            </button>
+                        </div>
+                    </div>
+                )}
+            </div>
+        );
+    }
+    
+    return (
+        <>
+            <button
+                onClick={() => setModalOpen(true)}
+                className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700"
+            >
+                지갑 연결
+            </button>
+            
+            <WalletModal 
+                isOpen={modalOpen}
+                onClose={() => setModalOpen(false)}
+            />
+        </>
+    );
+};
+```
+
+## 🔒 6. 보안 고려사항
+
+### 트랜잭션 검증
+```typescript
+// utils/transactionValidator.ts
+export class TransactionValidator {
+    static validateTransaction(transaction: any): boolean {
+        // 필수 필드 확인
+        if (!transaction.function || !transaction.arguments) {
+            return false;
+        }
+        
+        // 가스 한도 확인
+        if (transaction.max_gas_amount && transaction.max_gas_amount > 1000000) {
+            console.warn('높은 가스 한도가 설정되었습니다');
+            return confirm('높은 가스 비용이 예상됩니다. 계속하시겠습니까?');
+        }
+        
+        // 위험한 함수 호출 확인
+        const dangerousFunctions = [
+            'transfer_all',
+            'burn_all', 
+            'destroy_account'
+        ];
+        
+        if (dangerousFunctions.some(fn => transaction.function.includes(fn))) {
+            console.warn('위험한 함수 호출이 감지되었습니다');
+            return confirm('이 트랜잭션은 위험할 수 있습니다. 계속하시겠습니까?');
+        }
+        
+        return true;
+    }
+    
+    static sanitizeTransaction(transaction: any): any {
+        // 트랜잭션 데이터 정화
+        return {
+            ...transaction,
+            max_gas_amount: Math.min(transaction.max_gas_amount || 100000, 1000000),
+            gas_unit_price: Math.min(transaction.gas_unit_price || 100, 10000)
+        };
+    }
+}
+```
+
+## 🔗 다음 단계
+
+지갑 연동을 마스터했다면:
+
+**[개발 환경 (VS Code/IntelliJ) →](/developer-tools/ide-setup)**
+
+## 📚 참고 자료
+
+- [Movement 개발자 포털](https://developer.movementnetwork.xyz/)
+- [Movement 공식 문서](https://docs.movementnetwork.xyz/)
+- [Razor Wallet 문서](https://docs.razorwallet.xyz/)
+- [Nightly Wallet 문서](https://docs.nightly.app/)
+- [WalletConnect 문서](https://docs.walletconnect.com/)
+
+---
+
+*다양한 지갑을 지원하여 사용자 접근성을 극대화하세요! 💳🚀*

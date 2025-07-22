@@ -1,0 +1,356 @@
+# 🔄 제어 구조 (Control Structures)
+
+Move 언어의 조건문과 반복문을 학습합니다. 프로그램의 흐름을 제어하여 복잡한 로직을 구현할 수 있습니다.
+
+## 🎯 조건문 (Conditionals)
+
+### if / else 문
+가장 기본적인 조건문입니다:
+
+```move
+module movement::conditionals_example {
+    fun basic_if_else(x: u64): u64 {
+        if (x > 10) {
+            x * 2
+        } else {
+            x + 1
+        }
+    }
+    
+    // 조건문도 표현식(expression)입니다
+    fun conditional_expression(is_valid: bool): u64 {
+        let result = if (is_valid) 100 else 0;
+        result
+    }
+}
+```
+
+### else if 문
+여러 조건을 순차적으로 검사합니다:
+
+```move
+module movement::multiple_conditions {
+    fun grade_evaluation(score: u64): vector<u8> {
+        if (score >= 90) {
+            b"A"
+        } else if (score >= 80) {
+            b"B"  
+        } else if (score >= 70) {
+            b"C"
+        } else if (score >= 60) {
+            b"D"
+        } else {
+            b"F"
+        }
+    }
+    
+    fun token_tier(balance: u64): u8 {
+        if (balance >= 1000000) {
+            1  // VIP
+        } else if (balance >= 100000) {
+            2  // Gold
+        } else if (balance >= 10000) {
+            3  // Silver
+        } else {
+            4  // Bronze
+        }
+    }
+}
+```
+
+## 🔁 반복문 (Loops)
+
+### while 루프
+조건이 참인 동안 계속 실행합니다:
+
+```move
+module movement::while_examples {
+    use std::vector;
+    
+    // 기본 while 루프
+    fun count_down(mut n: u64): vector<u64> {
+        let result = vector::empty<u64>();
+        
+        while (n > 0) {
+            vector::push_back(&mut result, n);
+            n = n - 1;
+        };
+        
+        result
+    }
+    
+    // 합계 계산
+    fun sum_up_to(n: u64): u64 {
+        let sum = 0;
+        let i = 1;
+        
+        while (i <= n) {
+            sum = sum + i;
+            i = i + 1;
+        };
+        
+        sum
+    }
+}
+```
+
+### for 루프 (범위 기반)
+정해진 범위에서 반복합니다:
+
+```move
+module movement::for_examples {
+    use std::vector;
+    
+    // 범위 기반 for 루프
+    fun create_sequence(start: u64, end: u64): vector<u64> {
+        let result = vector::empty<u64>();
+        
+        for (i in start..end) {
+            vector::push_back(&mut result, i);
+        };
+        
+        result
+    }
+    
+    // 벡터 순회
+    fun sum_vector(numbers: &vector<u64>): u64 {
+        let sum = 0;
+        let len = vector::length(numbers);
+        
+        for (i in 0..len) {
+            sum = sum + *vector::borrow(numbers, i);
+        };
+        
+        sum
+    }
+}
+```
+
+### loop와 break
+무한 루프와 조건부 종료:
+
+```move
+module movement::loop_examples {
+    fun find_factor(n: u64): u64 {
+        let i = 2;
+        
+        loop {
+            if (n % i == 0) {
+                break i  // 값을 반환하며 종료
+            };
+            
+            if (i * i > n) {
+                break 1  // 소수인 경우
+            };
+            
+            i = i + 1;
+        }
+    }
+    
+    // continue 사용 (다음 반복으로 건너뛰기)
+    fun sum_even_numbers(limit: u64): u64 {
+        let sum = 0;
+        let i = 0;
+        
+        loop {
+            if (i > limit) break;
+            
+            i = i + 1;
+            
+            if (i % 2 != 0) continue;  // 홀수는 건너뛰기
+            
+            sum = sum + i;
+        }
+    }
+}
+```
+
+## 🎮 실전 예제: 게임 로직
+
+```move
+module movement::game_logic {
+    use std::vector;
+    
+    struct Player has store, drop {
+        health: u64,
+        mana: u64,
+        level: u8,
+    }
+    
+    struct Monster has store, drop {
+        health: u64,
+        attack: u64,
+        reward: u64,
+    }
+    
+    // 전투 시뮬레이션
+    fun battle(player: &mut Player, monster: &mut Monster): bool {
+        while (player.health > 0 && monster.health > 0) {
+            // 플레이어 공격
+            if (monster.health <= 10) {
+                monster.health = 0;
+            } else {
+                monster.health = monster.health - 10;
+            };
+            
+            // 몬스터 생존 시 반격
+            if (monster.health > 0) {
+                if (player.health <= monster.attack) {
+                    player.health = 0;
+                } else {
+                    player.health = player.health - monster.attack;
+                }
+            }
+        };
+        
+        // 플레이어 승리 여부 반환
+        player.health > 0
+    }
+    
+    // 레벨업 시스템
+    fun level_up_sequence(player: &mut Player, exp_gained: u64): u8 {
+        let mut total_exp = exp_gained;
+        let mut levels_gained = 0;
+        
+        while (total_exp >= exp_required_for_level(player.level + 1)) {
+            let required = exp_required_for_level(player.level + 1);
+            total_exp = total_exp - required;
+            player.level = player.level + 1;
+            levels_gained = levels_gained + 1;
+            
+            // 스탯 증가
+            player.health = player.health + 20;
+            player.mana = player.mana + 10;
+        };
+        
+        levels_gained
+    }
+    
+    fun exp_required_for_level(level: u8): u64 {
+        (level as u64) * 100
+    }
+}
+```
+
+## 💰 실전 예제: DeFi 로직
+
+```move
+module movement::defi_logic {
+    use std::vector;
+    
+    struct Pool has store {
+        token_a_reserve: u64,
+        token_b_reserve: u64,
+        total_supply: u64,
+    }
+    
+    struct PriceHistory has store {
+        prices: vector<u64>,
+        timestamps: vector<u64>,
+    }
+    
+    // 스왑 계산 (자동화된 마켓 메이커)
+    fun calculate_swap_output(
+        input_amount: u64,
+        input_reserve: u64,
+        output_reserve: u64
+    ): u64 {
+        // 상수 곱 공식: x * y = k
+        let numerator = input_amount * output_reserve;
+        let denominator = input_reserve + input_amount;
+        
+        numerator / denominator
+    }
+    
+    // 가격 평균 계산
+    fun calculate_twap(
+        price_history: &PriceHistory,
+        time_window: u64
+    ): u64 {
+        let len = vector::length(&price_history.prices);
+        let mut sum = 0;
+        let mut count = 0;
+        let current_time = 1000; // 예시 타임스탬프
+        
+        // 최근 time_window 내의 가격들만 고려
+        for (i in 0..len) {
+            let timestamp = *vector::borrow(&price_history.timestamps, i);
+            
+            if (current_time - timestamp <= time_window) {
+                sum = sum + *vector::borrow(&price_history.prices, i);
+                count = count + 1;
+            }
+        };
+        
+        if (count > 0) {
+            sum / count
+        } else {
+            0
+        }
+    }
+}
+```
+
+## ⚡ 최적화 팁
+
+### 1. 조건문 최적화
+```move
+// ✅ 좋은 예 - 가장 가능성 높은 조건을 먼저
+fun optimize_conditions(user_type: u8): u64 {
+    if (user_type == 1) {        // 90%의 경우
+        100
+    } else if (user_type == 2) { // 8%의 경우  
+        200
+    } else {                     // 2%의 경우
+        300
+    }
+}
+
+// ❌ 피해야 할 예 - 불필요한 중첩
+fun avoid_nested_conditions(x: u64): u64 {
+    if (x > 0) {
+        if (x < 100) {
+            if (x % 2 == 0) {
+                x * 2
+            } else {
+                x + 1
+            }
+        } else {
+            x / 2
+        }
+    } else {
+        0
+    }
+}
+```
+
+### 2. 루프 최적화
+```move
+// ✅ 좋은 예 - 벡터 길이를 미리 저장
+fun efficient_loop(data: &vector<u64>): u64 {
+    let len = vector::length(data);  // 한 번만 계산
+    let mut sum = 0;
+    
+    for (i in 0..len) {
+        sum = sum + *vector::borrow(data, i);
+    };
+    
+    sum
+}
+```
+
+## 🔗 다음 단계
+
+제어 구조를 마스터했다면:
+- [상수와 에러 처리](/basic-concepts/constants-errors) - 안정적인 코드
+- [제네릭과 팬텀 타입](/basic-concepts/generics-phantom) - 재사용 가능한 코드
+
+## 📚 참고 자료
+
+- [Movement 개발자 포털](https://developer.movementnetwork.xyz/)
+- [Movement 공식 문서](https://docs.movementnetwork.xyz/)
+- [데이터 타입](/basic-concepts/data-types)
+
+---
+
+*적절한 제어 구조로 복잡한 비즈니스 로직을 우아하게 표현하세요! 🎛️*

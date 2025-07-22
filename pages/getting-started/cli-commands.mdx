@@ -1,0 +1,492 @@
+# ⌨️ CLI 주요 명령어
+
+Movement CLI의 핵심 명령어들을 카테고리별로 정리했습니다. 개발 워크플로우에서 자주 사용하는 명령어들을 빠르게 찾아볼 수 있습니다.
+
+## 🎯 CLI 구조 이해
+
+Movement CLI는 다음과 같은 주요 카테고리로 구성됩니다:
+
+```bash
+movement
+├── account      # 계정 관리
+├── move         # Move 코드 관리  
+├── config       # 설정 관리
+├── node         # 노드 관리
+└── genesis      # 제네시스 관리
+```
+
+## 📁 1. 프로젝트 관리 명령어
+
+### 프로젝트 생성 및 초기화
+```bash
+# 새 Move 프로젝트 생성
+movement move init <PROJECT_NAME>
+movement move init hello-world
+
+# 기존 디렉토리에서 초기화  
+movement move init --name my-project
+
+# 템플릿으로 프로젝트 생성
+movement move init --template hello-world my-project
+```
+
+### 프로젝트 정보 확인
+```bash
+# 프로젝트 구조 확인
+movement move info
+
+# 의존성 확인
+movement move deps
+
+# 프로젝트 메타데이터
+movement move metadata
+```
+
+## 🔨 2. 빌드 및 컴파일 명령어
+
+### 기본 빌드
+```bash
+# 프로젝트 빌드
+movement move build
+
+# 특정 패키지만 빌드
+movement move build --package <PACKAGE_NAME>
+
+# 의존성 포함 빌드
+movement move build --include-deps
+
+# 디버그 정보 포함 빌드
+movement move build --dev
+```
+
+### 고급 빌드 옵션
+```bash
+# 병렬 빌드 (속도 향상)
+movement move build --parallel
+
+# 최적화된 빌드
+movement move build --release
+
+# 특정 아키텍처 대상
+movement move build --arch wasm32
+
+# 빌드 캐시 삭제 후 빌드
+movement move clean && movement move build
+```
+
+## 🧪 3. 테스트 명령어
+
+### 기본 테스트
+```bash
+# 모든 테스트 실행
+movement move test
+
+# 특정 함수만 테스트
+movement move test --filter test_function_name
+
+# 특정 모듈만 테스트
+movement move test --filter module_name
+
+# 패키지별 테스트
+movement move test --package <PACKAGE_NAME>
+```
+
+### 테스트 옵션
+```bash
+# 자세한 테스트 출력
+movement move test --verbose
+
+# 실패한 테스트만 재실행
+movement move test --rerun-failed  
+
+# 테스트 커버리지 확인
+movement move test --coverage
+
+# 병렬 테스트 실행
+movement move test --parallel
+```
+
+### 테스트 디버깅
+```bash
+# 특정 테스트 디버깅
+movement move test --filter test_name --verbose
+
+# 실패 시 즉시 중단
+movement move test --fail-fast
+
+# 가스 프로파일링
+movement move test --gas-profile
+```
+
+## 👤 4. 계정 관리 명령어
+
+### 계정 생성 및 관리
+```bash
+# 새 계정 생성
+movement account create --account-name <NAME>
+
+# 계정 목록 조회
+movement account list
+
+# 계정 정보 확인
+movement account show --account-name <NAME>
+
+# 계정 삭제
+movement account delete --account-name <NAME>
+```
+
+### 계정 정보 조회
+```bash
+# 잔액 조회
+movement account balance --account-name <NAME>
+
+# 계정 리소스 조회
+movement account resources --account-name <NAME>
+
+# 계정 모듈 조회
+movement account modules --account-name <NAME>
+
+# 트랜잭션 히스토리
+movement account transactions --account-name <NAME>
+```
+
+### 키 관리
+```bash
+# 개인키 내보내기
+movement account export --account-name <NAME> --output-file key.txt
+
+# 개인키로 계정 가져오기
+movement account import --account-name <NAME> --private-key-file key.txt
+
+# 새 키 생성
+movement key generate --key-type ed25519 --output-file new-key.txt
+```
+
+## 💰 5. 토큰 및 전송 명령어
+
+### 토큰 관리
+```bash
+# Faucet에서 토큰 요청
+movement account fund --account-name <NAME>
+
+# 특정 주소로 토큰 요청
+movement account fund --address <ADDRESS>
+
+# 토큰 전송
+movement account transfer \
+    --from <FROM_ACCOUNT> \
+    --to <TO_ADDRESS> \
+    --amount <AMOUNT>
+```
+
+### 고급 전송 옵션
+```bash
+# 시뮬레이션 (실제 전송 안함)
+movement account transfer --simulate \
+    --from alice --to 0xBOB --amount 10
+
+# 가스 한도 설정
+movement account transfer \
+    --from alice --to 0xBOB --amount 10 \
+    --gas-limit 1000
+
+# 최대 가스 가격 설정
+movement account transfer \
+    --from alice --to 0xBOB --amount 10 \
+    --max-gas-price 100
+```
+
+## 🚀 6. 배포 명령어
+
+### 모듈 배포
+```bash
+# 현재 프로젝트 배포
+movement move publish --account-name <ACCOUNT>
+
+# 특정 패키지 배포
+movement move publish --package <PACKAGE> --account-name <ACCOUNT>
+
+# 업그레이드 가능한 배포
+movement move publish --upgrade --account-name <ACCOUNT>
+```
+
+### 배포 옵션
+```bash
+# 배포 시뮬레이션
+movement move publish --simulate --account-name <ACCOUNT>
+
+# 가스 한도 설정
+movement move publish --gas-limit 10000 --account-name <ACCOUNT>
+
+# 특정 모듈만 배포
+movement move publish --modules module1,module2 --account-name <ACCOUNT>
+```
+
+### 배포 확인
+```bash
+# 배포된 모듈 확인
+movement account modules --account-name <ACCOUNT>
+
+# 특정 모듈 정보 조회
+movement move view-module --address <ADDRESS> --module-name <MODULE>
+
+# 모듈 함수 목록
+movement move view-functions --address <ADDRESS> --module-name <MODULE>
+```
+
+## 🔧 7. 설정 관리 명령어
+
+### 네트워크 설정
+```bash
+# 현재 설정 확인
+movement config show
+
+# 네트워크 변경
+movement config set-network testnet
+movement config set-network mainnet
+movement config set-network devnet
+
+# 커스텀 네트워크 설정
+movement config set-network-url https://custom.rpc.url/v1
+```
+
+### 프로필 관리
+```bash
+# 새 프로필 생성
+movement config create-profile --profile-name dev
+
+# 프로필 목록
+movement config list-profiles
+
+# 프로필 전환
+movement config use-profile dev
+
+# 프로필 삭제
+movement config delete-profile dev
+```
+
+### 기본 계정 설정
+```bash
+# 기본 계정 설정
+movement config set-default-account alice
+
+# 기본 계정 확인
+movement config show | grep "default_account"
+```
+
+## 📊 8. 조회 및 분석 명령어
+
+### 블록체인 상태 조회
+```bash
+# 현재 블록 높이
+movement node show-current-block
+
+# 특정 블록 정보
+movement node show-block --block-height <HEIGHT>
+
+# 네트워크 정보
+movement config show-network-info
+```
+
+### 트랜잭션 조회
+```bash
+# 트랜잭션 상세 정보
+movement transaction show --hash <TX_HASH>
+
+# 트랜잭션 시뮬레이션
+movement move simulate --function <FUNCTION> --args <ARGS>
+
+# 가스 추정
+movement move estimate-gas --function <FUNCTION> --args <ARGS>
+```
+
+### 계정 분석
+```bash
+# 계정 이벤트 조회
+movement account events --account-name <NAME>
+
+# 계정별 트랜잭션
+movement account transactions --account-name <NAME> --limit 10
+
+# 리소스 변경 이력
+movement account resource-changes --account-name <NAME>
+```
+
+## 🎮 9. 실전 워크플로우 예제
+
+### 개발 워크플로우
+```bash
+#!/bin/bash
+# 개발 시작
+echo "=== Move 개발 워크플로우 ==="
+
+# 1. 프로젝트 생성
+movement move init my-dapp
+cd my-dapp
+
+# 2. 코드 작성 (에디터에서)
+# ... 코드 작성 ...
+
+# 3. 빌드 및 테스트
+echo "빌드 중..."
+movement move build
+
+echo "테스트 중..."
+movement move test
+
+# 4. 테스트넷 계정 준비
+movement account create --account-name dev-account
+movement account fund --account-name dev-account
+
+# 5. 배포
+echo "테스트넷에 배포 중..."
+movement move publish --account-name dev-account
+
+echo "배포 완료! 🎉"
+```
+
+### CI/CD 스크립트
+```bash
+#!/bin/bash
+# CI/CD 파이프라인
+set -e
+
+echo "=== Move CI/CD 파이프라인 ==="
+
+# 린팅
+echo "코드 린팅..."
+movement move check
+
+# 테스트
+echo "테스트 실행..."
+movement move test --coverage
+
+# 빌드
+echo "릴리즈 빌드..."
+movement move build --release
+
+# 배포 (프로덕션)
+if [[ "$BRANCH" == "main" ]]; then
+    echo "메인넷 배포..."
+    movement move publish --account-name prod-account --network mainnet
+fi
+```
+
+## 🔍 10. 디버깅 및 문제 해결
+
+### 디버그 모드
+```bash
+# 자세한 에러 출력
+movement move build --verbose
+
+# 디버그 정보 포함
+movement move test --debug
+
+# 스택 트레이스 출력
+RUST_BACKTRACE=1 movement move build
+```
+
+### 로그 확인
+```bash
+# 로그 레벨 설정
+RUST_LOG=debug movement move build
+
+# 특정 모듈 로그만
+RUST_LOG=movement::compiler=debug movement move build
+
+# 로그 파일로 저장
+movement move build 2>&1 | tee build.log
+```
+
+### 일반적인 에러 해결
+```bash
+# 의존성 문제
+movement move clean
+rm -rf build/
+movement move build
+
+# 네트워크 연결 문제
+movement config set-network-url https://backup.rpc.url/v1
+
+# 캐시 문제
+rm -rf ~/.movement/
+movement config init
+```
+
+## 💡 11. 유용한 팁과 트릭
+
+### 별칭 설정
+```bash
+# ~/.bashrc 또는 ~/.zshrc에 추가
+alias mvb='movement move build'
+alias mvt='movement move test'  
+alias mvp='movement move publish'
+alias mva='movement account'
+alias mvc='movement config'
+```
+
+### 자주 사용하는 조합
+```bash
+# 빌드 + 테스트
+movement move build && movement move test
+
+# 테스트 + 배포
+movement move test && movement move publish --account-name dev
+
+# 클린 + 빌드
+movement move clean && movement move build
+```
+
+### JSON 출력 활용
+```bash
+# JSON으로 결과 받기
+movement account show --account-name alice --output json | jq '.address'
+
+# 잔액만 추출
+movement account balance --account-name alice --output json | jq '.balance'
+```
+
+## 📚 12. 도움말 및 문서
+
+### 도움말 보기
+```bash
+# 전체 도움말
+movement --help
+
+# 특정 명령어 도움말
+movement move --help
+movement account --help
+movement config --help
+
+# 하위 명령어 도움말
+movement move build --help
+movement account create --help
+```
+
+### 버전 및 정보
+```bash
+# CLI 버전 확인
+movement --version
+
+# 상세 시스템 정보
+movement info
+
+# 지원되는 네트워크 목록
+movement config list-networks
+```
+
+## 🔗 다음 단계
+
+CLI 명령어를 마스터했다면:
+
+**[Build & Deploy 기초 가이드 →](/getting-started/build-deploy)**
+
+## 📚 참고 자료
+
+- [Movement 개발자 포털](https://developer.movementnetwork.xyz/)
+- [Movement 공식 문서](https://docs.movementnetwork.xyz/)
+- [Movement CLI GitHub](https://github.com/movementlabsxyz/aptos-core)
+
+---
+
+*효율적인 CLI 사용으로 개발 생산성을 높이세요! ⚡*

@@ -1,0 +1,265 @@
+# 🏗️ 모듈과 리소스 (Modules & Resources)
+
+Move 언어의 핵심 개념인 모듈(Module)과 리소스(Resource)를 학습합니다. 이 두 개념은 Move의 안전성과 표현력을 제공하는 핵심 요소입니다.
+
+## 📦 모듈 (Module)
+
+모듈은 Move 스마트 계약의 기본 단위입니다. 함수, 구조체, 상수를 그룹화하여 코드를 조직화합니다.
+
+### 모듈 선언
+```move
+module movement::my_module {
+    use std::signer;
+    use std::vector;
+    
+    // 구조체, 함수, 상수 등이 여기에 들어감
+}
+```
+
+### 모듈 주소 체계
+- **형식**: `0xAddress::ModuleName`
+- **예시**: 
+  - `0x1::coin` (표준 코인 모듈)
+  - `movement::nft` (Movement NFT 모듈)
+  - `@movement::defi` (명명된 주소 사용)
+
+### 패키지와 모듈
+```toml
+# Move.toml 파일
+[package]
+name = "MyProject"
+version = "0.1.0"
+
+[addresses]
+movement = "0x1"
+my_addr = "0x42"
+
+[dependencies]
+MoveStdlib = { git = "https://github.com/move-language/move.git", subdir = "language/move-stdlib", rev = "main" }
+```
+
+## 🎯 리소스 (Resource)
+
+리소스는 디지털 자산을 안전하게 표현하기 위한 Move의 특별한 구조체입니다.
+
+### 리소스 정의
+```move
+module movement::token {
+    use std::signer;
+    
+    // 리소스 정의 - has key 필수
+    struct Token has key, store {
+        amount: u64,
+        metadata: vector<u8>,
+    }
+    
+    // 리소스 생성 함수
+    public fun mint_token(account: &signer, amount: u64) {
+        let token = Token {
+            amount,
+            metadata: b"Movement Token",
+        };
+        
+        // 리소스를 계정에 저장
+        move_to(account, token);
+    }
+}
+```
+
+## 🎭 Abilities (능력)
+
+리소스와 구조체는 4가지 abilities를 가질 수 있습니다:
+
+### 1. **key** - 전역 저장 가능
+```move
+struct MyResource has key {
+    data: u64
+}
+// move_to()로 전역 저장소에 저장 가능
+```
+
+### 2. **store** - 다른 구조체에 저장 가능
+```move
+struct Inner has store {
+    value: u64
+}
+
+struct Outer has key {
+    inner: Inner  // Inner가 store를 가져야 함
+}
+```
+
+### 3. **copy** - 복사 가능
+```move
+struct Copyable has copy, drop {
+    data: u64
+}
+
+fun example() {
+    let x = Copyable { data: 42 };
+    let y = x;  // copy ability로 복사됨
+    // x와 y 모두 사용 가능
+}
+```
+
+### 4. **drop** - 자동 삭제 가능
+```move
+struct Droppable has drop {
+    data: u64
+}
+// 스코프를 벗어나면 자동으로 삭제됨
+```
+
+## 🔄 리소스 생명주기
+
+### 리소스 생성과 이동
+```move
+module movement::resource_lifecycle {
+    use std::signer;
+    
+    struct MyResource has key, store, drop {
+        data: u64
+    }
+    
+    // 1. 리소스 생성
+    public fun create_resource(account: &signer) {
+        let resource = MyResource { data: 100 };
+        move_to(account, resource);
+    }
+    
+    // 2. 리소스 접근
+    public fun read_resource(addr: address): u64 acquires MyResource {
+        let resource_ref = borrow_global<MyResource>(addr);
+        resource_ref.data
+    }
+    
+    // 3. 리소스 수정
+    public fun update_resource(addr: address, new_value: u64) acquires MyResource {
+        let resource_ref = borrow_global_mut<MyResource>(addr);
+        resource_ref.data = new_value;
+    }
+    
+    // 4. 리소스 이동
+    public fun move_resource(account: &signer, addr: address) acquires MyResource {
+        let resource = move_from<MyResource>(addr);
+        move_to(account, resource);
+    }
+}
+```
+
+## 💡 실전 예제: NFT 구조
+
+```move
+module movement::simple_nft {
+    use std::signer;
+    use std::string::{Self, String};
+    
+    // NFT 리소스 정의
+    struct NFT has key, store {
+        id: u64,
+        name: String,
+        creator: address,
+        metadata_uri: String,
+    }
+    
+    // NFT 컬렉션 (한 계정이 여러 NFT 소유 가능)
+    struct NFTCollection has key {
+        nfts: vector<NFT>,
+        next_id: u64,
+    }
+    
+    // 컬렉션 초기화
+    public fun init_collection(account: &signer) {
+        move_to(account, NFTCollection {
+            nfts: vector::empty(),
+            next_id: 1,
+        });
+    }
+    
+    // NFT 발행
+    public fun mint_nft(
+        creator: &signer,
+        name: String,
+        metadata_uri: String,
+    ) acquires NFTCollection {
+        let creator_addr = signer::address_of(creator);
+        let collection = borrow_global_mut<NFTCollection>(creator_addr);
+        
+        let nft = NFT {
+            id: collection.next_id,
+            name,
+            creator: creator_addr,
+            metadata_uri,
+        };
+        
+        vector::push_back(&mut collection.nfts, nft);
+        collection.next_id = collection.next_id + 1;
+    }
+    
+    // NFT 전송
+    public fun transfer_nft(
+        from: &signer,
+        to: address,
+        nft_id: u64,
+    ) acquires NFTCollection {
+        // 실제 구현에서는 더 복잡한 로직 필요
+        // 여기서는 개념 설명을 위한 단순화된 버전
+    }
+}
+```
+
+## ⚠️ 중요한 규칙들
+
+### 1. 리소스 안전성
+```move
+// ❌ 잘못된 예 - 리소스 복사 불가
+struct Token has key {
+    amount: u64
+}
+
+fun wrong_example() {
+    let token1 = Token { amount: 100 };
+    let token2 = token1;  // 컴파일 에러! copy가 없음
+}
+
+// ✅ 올바른 예 - 명시적 이동
+fun correct_example(account: &signer) {
+    let token = Token { amount: 100 };
+    move_to(account, token);  // 소유권 이동
+    // token은 더 이상 사용 불가
+}
+```
+
+### 2. acquires 키워드
+```move
+// 전역 리소스에 접근하는 함수는 acquires 필요
+public fun access_resource(addr: address): u64 acquires MyResource {
+    borrow_global<MyResource>(addr).data
+}
+```
+
+### 3. 리소스 존재 확인
+```move
+use std::account;
+
+public fun safe_access(addr: address): u64 acquires MyResource {
+    assert!(exists<MyResource>(addr), ERROR_RESOURCE_NOT_FOUND);
+    borrow_global<MyResource>(addr).data
+}
+```
+
+## 🔗 다음 단계
+
+모듈과 리소스를 이해했다면:
+- [제어 구조](/basic-concepts/control-structures) - 조건문과 반복문
+- [상수와 에러 처리](/basic-concepts/constants-errors) - 안정적인 코드 작성
+
+## 📚 참고 자료
+
+- [Movement 개발자 포털](https://developer.movementnetwork.xyz/)
+- [Movement 공식 문서](https://docs.movementnetwork.xyz/)
+- [데이터 타입](/basic-concepts/data-types)
+
+---
+
+*Move의 리소스 모델은 디지털 자산의 안전한 표현을 가능하게 합니다! 💎*
