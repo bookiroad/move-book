@@ -1,24 +1,119 @@
-# Move Book
+# Movement Move Book
 
-**Move Book**은 Movement Network의 한국어 개발자 문서입니다.
+**Movement에서 시작하는 Move 개발 가이드**
 
 Move 언어부터 dApp 개발까지 체계적으로 학습할 수 있는 완전한 가이드를 제공합니다.
 
-## 🚀 시작하기
+## 📚 가이드 구성
 
-Movement Network 개발을 시작하는 방법을 알아보세요:
+### 🚀 **[시작하기](/getting-started)**
+Movement 개발 환경 구축과 기본 사용법
+- 개발 환경 세팅 (Rust & Move 설치)
+- Movement CLI 설치 및 설정
+- VS Code/Cursor 확장 프로그램 설정
+- 첫 Move 모듈 만들기
+- 계정 생성 & Faucet 사용법
+- Movement CLI 주요 명령어
+- Build & Deploy 기초 가이드
 
-- 📚 **기본 개념**: Move 언어의 핵심 개념들을 학습합니다
-- 🎯 **고급 개념**: Smart Vector, Smart Table, Resource Account를 다룹니다  
-- 🏗️ **dApp 개발**: NFT, DeFi, 게임 개발을 실습합니다
+### 🔧 **[개발자 도구](/developer-tools)**
+개발 생산성을 높이는 도구들
+- Movement CLI 상세 가이드
+- SDK 모음 (TypeScript, Python, Rust)
+- Wallet 연동 도구 (Razor, Nightly)
+- 개발 환경 (VS Code Extensions, IntelliJ)
+
+### 🌐 **[네트워크 & 인프라](/network-infrastructure)**
+Movement Network 생태계 이해
+- 네트워크 개요 (Mainnet, Testnet, Devnet)
+- RPC & Indexer 엔드포인트
+- Faucets & Explorer 활용
+- Oracle 연동 (Pyth)
+- Full Node 운영 가이드
+
+### 📚 **[기본 개념](/basic-concepts)**
+Move 언어의 핵심 개념들
+- Move 언어 구조 & 데이터 타입
+- 모듈과 리소스 시스템
+- 제어 구조 & 함수 타입
+- 상수 & 에러 처리
+- 제네릭 & 팬텀 타입
+- 단위 테스트 작성법
+
+### 🎯 **[고급 개념](/advanced-concepts)**
+전문적인 Move 개발 패턴
+- Smart Vector & Smart Table
+- Resource Account & Capability
+- Event, Object, Signer 심화
+- Access Control & Security
+
+### 🏗️ **[dApp 개발](/dapp-development)**
+실제 애플리케이션 구축 가이드
+
+#### 🖼️ **[NFT 개발](/dapp-development/nft-development)**
+- NFT 개념 & Collection 설계
+- Token Standard & Metadata
+- Resource Account 활용
+- Royalty & Property Map
+- 완전한 NFT 마켓플레이스 예제
+
+#### 🏦 **[DeFi 개발](/dapp-development/defi-development)**
+- Fungible Asset 프레임워크
+- Lending & Borrowing 시스템
+- DEX & AMM 구현
+- 거버넌스 DAO 시스템
+- 완전한 DeFi 프로토콜 예제
+
+#### 🎮 **[게임 개발](/dapp-development/game-development)**
+- Move Slayers - 온체인 RPG 완전 가이드
+
+## 🎯 학습 경로
+
+### 초보자 추천 순서
+1. **[시작하기](/getting-started)** - 개발 환경 구축
+2. **[기본 개념](/basic-concepts)** - Move 언어 학습
+3. **[고급 개념](/advanced-concepts)** - 심화 패턴 이해
+4. **[dApp 개발](/dapp-development)** - 실전 프로젝트 구축
+
+### 분야별 바로가기
+- **DeFi에 관심이 있다면**: [DeFi 개발 가이드](/dapp-development/defi-development)
+- **게임 개발에 관심이 있다면**: [게임 개발 가이드](/dapp-development/game-development)
+- **NFT에 관심이 있다면**: [NFT 개발 가이드](/dapp-development/nft-development)
 
 ## 💡 특징
 
 - **한국어 완전 지원**: 영어 장벽 없이 학습 가능
 - **실전 중심**: 바로 사용할 수 있는 예제와 코드
 - **체계적 구성**: 기초부터 고급까지 단계별 학습
-- **해커톤 최적화**: 빠른 프로토타입 개발 지원
+- **완전한 예제**: 실제 동작하는 dApp 구현 포함
+
+## 🛠️ 빠른 시작
+
+```bash
+# Movement CLI 설치
+curl -fsSL https://get.movementnetwork.xyz | sh
+
+# 새 프로젝트 생성
+movement init my-project
+cd my-project
+
+# 개발 서버 시작
+movement dev
+```
+
+## 🤝 커뮤니티
+
+- **GitHub**: [Move Book 저장소](https://github.com/bookiroad/move-book)
+- **Discord**: [Movement](https://discord.com/invite/movementlabsxyz)
+- **Telegram**: [Movement Korea](https://t.me/Movement_KOR)
+
+## 📖 추가 리소스
+
+- [Movement 개발자 포털](https://developer.movementnetwork.xyz/)
+- [Movement Network 공식 문서](https://docs.movementnetwork.xyz)
+- [Move 언어 공식 문서](https://move-language.github.io/move/)
+- [Movement Labs GitHub](https://github.com/movementlabsxyz)
 
 ---
 
-Movement Network와 함께 Web3의 미래를 만들어보세요! 🌟
+Movement Network와 함께 Web3 개발을 시작해보세요! 🚀
