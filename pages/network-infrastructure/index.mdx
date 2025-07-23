@@ -1,20 +1,223 @@
-# Network Infrastructure
+# 🌐 네트워크 & 인프라 (Network & Infrastructure)
 
-Understanding the underlying network infrastructure for Move-based blockchains.
+Movement Network의 다양한 네트워크 환경과 인프라 서비스 활용 방법을 알아보겠습니다. 개발부터 프로덕션까지 필요한 모든 네트워크 리소스를 다룹니다.
 
-## Overview
+## 🎯 학습 목표
 
-This section provides insights into the network layer, consensus mechanisms, and infrastructure components that support Move-based blockchain networks.
+이 섹션을 완료하면:
+- Movement의 다양한 네트워크 환경을 이해하고 활용할 수 있습니다
+- RPC와 Indexer 서비스를 효과적으로 사용할 수 있습니다
+- Faucet과 Explorer를 통한 개발 워크플로우를 구축할 수 있습니다
+- Oracle 데이터를 스마트 계약에 통합할 수 있습니다
+- Full Node를 직접 운영할 수 있습니다
 
-## Topics Covered
+## 🌐 Movement 네트워크 생태계
 
-- Network Architecture
-- Consensus Mechanisms
-- Node Operations
-- Network Security
-- Performance Optimization
-- Monitoring and Maintenance
+### 네트워크 환경 개요
+```
+📊 Movement Network Ecosystem
 
-## Infrastructure Components
+Production:
+├── 🏭 Mainnet - 실제 운영 환경
+│   ├── 실제 MOVE 토큰 사용
+│   ├── 높은 보안 수준
+│   └── 안정적인 성능
 
-Learn about the key components that make up a robust Move blockchain network. 
+Development:
+├── 🧪 Testnet (Bardock) - 테스트 환경
+│   ├── 무료 테스트 토큰
+│   ├── 실제와 동일한 기능
+│   └── 안전한 실험 환경
+│   
+└── 🔬 Devnet (Suzuka) - 개발 환경
+    ├── 최신 기능 테스트
+    ├── 빠른 블록 시간
+    └── 개발자 친화적
+```
+
+### 주요 인프라 서비스
+
+| 서비스 | 역할 | 중요도 | 사용 난이도 |
+|--------|------|--------|------------|
+| **RPC Endpoints** | API 접근점 | 🌟🌟🌟🌟🌟 | ⭐⭐ |
+| **Indexer** | 데이터 쿼리 | 🌟🌟🌟🌟 | ⭐⭐⭐ |
+| **Faucets** | 테스트 토큰 | 🌟🌟🌟🌟 | ⭐ |
+| **Explorers** | 블록체인 탐색 | 🌟🌟🌟 | ⭐ |
+| **Oracles** | 외부 데이터 | 🌟🌟🌟 | ⭐⭐⭐⭐ |
+
+## 📖 실용적 가이드
+
+### 1. [네트워크 개요 (Mainnet/Testnet/Devnet)](/network-infrastructure/network-overview)
+Movement의 다양한 네트워크 환경 이해:
+- **Mainnet**: 프로덕션 환경과 실제 토큰 사용법
+- **Bardock Testnet**: 개발 테스트를 위한 환경
+- **Suzuka Devnet**: 최신 기능 실험 환경
+- **네트워크 선택 기준**: 개발 단계별 적절한 환경
+- **네트워크 전환**: CLI와 SDK에서 네트워크 변경
+
+### 2. [RPC & Indexer 엔드포인트](/network-infrastructure/rpc-indexer)
+블록체인 데이터 접근을 위한 핵심 서비스:
+- **공식 RPC 엔드포인트**: Movement 제공 API 서버
+- **써드파티 서비스**: Alchemy, QuickNode 등 활용
+- **Indexer 서비스**: 효율적인 데이터 쿼리
+- **Rate Limiting**: API 사용량 관리와 최적화
+- **에러 처리**: 네트워크 장애 대응 방법
+
+### 3. [Faucets & Explorer 활용](/network-infrastructure/faucets-explorer)
+개발에 필수적인 도구들:
+- **Faucet 사용법**: 테스트 토큰 획득 방법
+- **Movement Explorer**: 트랜잭션과 계정 탐색
+- **개발 워크플로우**: Faucet → 개발 → Explorer 검증
+- **디버깅 활용**: Explorer를 통한 문제 진단
+- **모니터링**: 계정과 계약 상태 추적
+
+### 4. [Oracle 연동 (Pyth)](/network-infrastructure/oracle-integration)
+외부 데이터를 스마트 계약에 통합:
+- **Pyth Oracle**: 실시간 가격 데이터 활용
+- **Oracle 통합**: Move 계약에서 Oracle 사용
+- **가격 피드**: 암호화폐, 주식, 원자재 가격
+- **데이터 검증**: Oracle 데이터의 신뢰성 확보
+- **실전 예제**: DeFi 프로토콜에서 Oracle 활용
+
+### 5. [Full Node 운영 (고급)](/network-infrastructure/full-node-operations)
+자체 인프라 구축과 운영:
+- **Full Node 설치**: 하드웨어 요구사항과 설치 과정
+- **네트워크 연결**: 피어 연결과 동기화
+- **모니터링**: 노드 상태 확인과 헬스체크
+- **백업과 복구**: 데이터 보호 전략
+- **성능 튜닝**: 최적화와 리소스 관리
+
+## ⚡ 빠른 시작 가이드
+
+### 개발 환경 설정
+```bash
+# 테스트넷 설정
+movement config set-network testnet
+
+# RPC 연결 테스트
+curl -X POST https://testnet.bardock.movementnetwork.xyz/v1 \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"get_ledger_info","id":1}'
+
+# Faucet에서 토큰 받기
+movement account fund --account-name dev-account
+```
+
+### 기본 네트워크 정보
+```typescript
+// TypeScript SDK 설정
+export const NETWORK_CONFIG = {
+  mainnet: {
+    rpc: "https://mainnet.movementnetwork.xyz/v1",
+    explorer: "https://explorer.movementnetwork.xyz/?network=mainnet"
+  },
+  testnet: {
+    rpc: "https://testnet.bardock.movementnetwork.xyz/v1", 
+    faucet: "https://faucet.movementnetwork.xyz/",
+    explorer: "https://explorer.movementnetwork.xyz/?network=bardock+testnet"
+  },
+  devnet: {
+    rpc: "https://devnet.suzuka.movementnetwork.xyz/v1",
+    faucet: "https://faucet.devnet.suzuka.movementnetwork.xyz/",
+    explorer: "https://explorer.movementnetwork.xyz/?network=suzuka+devnet"
+  }
+};
+```
+
+## 🛠️ 필수 도구 및 서비스
+
+### 개발 도구
+- **Movement CLI**: 네트워크 관리 도구
+- **SDK (TypeScript/Python/Rust)**: 프로그래밍 인터페이스
+- **Wallet Extensions**: Razor, Nightly 등
+
+### 모니터링 도구
+- **Movement Explorer**: 공식 블록체인 탐색기
+- **RPC Status**: 네트워크 상태 확인
+- **Gas Tracker**: 가스 가격 모니터링
+
+### 외부 서비스
+- **Alchemy**: 고성능 RPC 서비스
+- **QuickNode**: 멀티체인 인프라
+- **Pyth Network**: 가격 Oracle 서비스
+
+## 🎯 네트워크별 사용 시나리오
+
+### 개발 단계별 네트워크 선택
+
+#### 1. 초기 개발 (Devnet)
+```
+✅ 사용 상황:
+- 새로운 기능 실험
+- 빠른 프로토타이핑
+- 최신 Movement 기능 테스트
+
+⚠️ 주의사항:
+- 데이터가 자주 초기화될 수 있음
+- 실험적 기능으로 불안정할 수 있음
+```
+
+#### 2. 통합 테스트 (Testnet)
+```
+✅ 사용 상황:
+- 완성된 기능의 종합 테스트
+- 프론트엔드와 백엔드 통합
+- 사용자 테스트 진행
+
+⚠️ 주의사항:
+- 실제 환경과 동일한 조건으로 테스트
+- 충분한 테스트 기간 확보
+```
+
+#### 3. 프로덕션 배포 (Mainnet)
+```
+✅ 사용 상황:
+- 실제 서비스 런칭
+- 실제 가치가 있는 토큰 사용
+- 높은 보안과 안정성 필요
+
+⚠️ 주의사항:
+- 철저한 보안 감사 완료
+- 충분한 테스트 완료
+- 비상 계획 수립
+```
+
+## 📊 네트워크 성능 비교
+
+### 네트워크별 특성
+```
+┌─────────────┬──────────┬──────────┬──────────┐
+│   특성      │ Mainnet  │ Testnet  │ Devnet   │
+├─────────────┼──────────┼──────────┼──────────┤
+│ 블록 시간   │   2초    │   2초    │   1초    │
+│ 안정성      │   최고   │   높음   │   보통   │
+│ 토큰 비용   │   실제   │   무료   │   무료   │
+│ 데이터 지속 │   영구   │   안정   │   임시   │
+│ 기능 완성도 │   안정   │   안정   │   실험   │
+└─────────────┴──────────┴──────────┴──────────┘
+```
+
+## 🔗 학습 경로
+
+네트워크와 인프라를 단계별로 학습하세요:
+
+1. **[네트워크 개요](/network-infrastructure/network-overview)** - 기본 이해
+2. **[RPC & Indexer](/network-infrastructure/rpc-indexer)** - 데이터 접근
+3. **[Faucets & Explorer](/network-infrastructure/faucets-explorer)** - 개발 도구
+4. **[Oracle 연동](/network-infrastructure/oracle-integration)** - 고급 기능
+5. **[Full Node 운영](/network-infrastructure/full-node-operations)** - 인프라 관리
+
+## 📚 추가 리소스
+
+### 공식 문서
+- [Movement 개발자 포털](https://developer.movementnetwork.xyz/)
+- [Movement 공식 문서](https://docs.movementnetwork.xyz/)
+
+### 외부 서비스
+- [Movement Explorer](https://explorer.movementnetwork.xyz/)
+- [Pyth Network](https://pyth.network/)
+- [Alchemy Movement](https://www.alchemy.com/)
+
+---
+
+*Movement Network의 강력한 인프라를 활용하여 혁신적인 dApp을 구축해보세요! 🌐🚀*

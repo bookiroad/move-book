@@ -1,0 +1,1209 @@
+# 🎮 Move Slayers - 온체인 RPG 완전 가이드
+
+Movement Network에서 Move 언어로 완전한 온체인 RPG 게임을 구축하는 종합 가이드입니다. 플레이어 시스템부터 전투, 아이템, 경험치까지 모든 게임 메커니즘을 Move로 구현해봅니다.
+
+## 🎯 학습 목표
+
+이 가이드를 완료하면:
+- Move 언어로 복잡한 게임 로직을 구현할 수 있습니다
+- 온체인 상태 관리와 자원 안전성을 이해할 수 있습니다
+- 플레이어, 아이템, 전투 시스템을 설계할 수 있습니다
+- 테스트 주도 개발로 안정적인 게임을 만들 수 있습니다
+- 실제 플레이 가능한 RPG 게임을 배포할 수 있습니다
+
+## 🏗️ 프로젝트 구조
+
+Move Slayers RPG는 다음과 같은 모듈형 구조로 설계됩니다:
+
+```
+move_slayers/
+├── sources/
+│   ├── hero.move      # 플레이어 로직 및 게임 메커니즘
+│   └── enemies.move   # 적 정의 및 전투 시스템
+├── tests/
+│   └── hero_tests.move # 종합 테스트 스위트
+└── Move.toml          # 프로젝트 설정
+```
+
+### 핵심 게임 시스템
+```
+🎮 Move Slayers RPG 아키텍처:
+
+👤 플레이어 시스템
+├── 레벨 및 경험치 관리
+├── 체력/마나 시스템
+├── 인벤토리 관리
+└── 장비 시스템
+
+⚔️ 전투 시스템
+├── 턴제 전투 메커니즘
+├── 데미지 계산
+├── 적 AI 및 반격
+└── 전투 결과 처리
+
+🎒 아이템 시스템
+├── 무기, 방패, 갑옷
+├── 물약 및 소모품
+├── 장비 효과
+└── 아이템 제작
+
+🐗 적 시스템
+├── 다양한 적 타입
+├── 능력치 시스템
+├── 보상 메커니즘
+└── 난이도 조절
+```
+
+## 👤 모듈 1: 플레이어 시스템 (hero.move)
+
+### 모듈 선언 및 Import
+```move
+module move_slayers::hero {
+    use std::signer;
+    use std::vector;
+    use std::string;
+    use std::option;
+    use move_slayers::enemies;
+```
+
+**핵심 개념:**
+- `module move_slayers::hero`: move_slayers 패키지의 hero 모듈 선언
+- `use std::signer`: 계정 인증을 위한 signer 타입 사용
+- `use std::vector`: 인벤토리 시스템을 위한 동적 배열
+- `use std::string`: 아이템 이름 등 문자열 처리
+- `use std::option`: 장비 슬롯의 선택적 값 처리
+
+### 상수 및 타입 정의
+```move
+    const TYPE_SWORD: u8 = 0;
+    const TYPE_SHIELD: u8 = 1;
+    const TYPE_ARMOR: u8 = 2;
+    const TYPE_POTION: u8 = 3;
+```
+
+**설계 원칙:**
+- 매직 넘버 대신 상수를 사용하여 코드 가독성 향상
+- `u8` 타입으로 메모리 효율성 확보
+- 확장 가능한 아이템 타입 시스템
+
+### 아이템 구조체
+```move
+    struct Item has copy, drop, store {
+        id: u64,
+        name: string::String,
+        item_type: u8,
+        power: u64,
+    }
+```
+
+**Move 능력 시스템:**
+- `copy`: 아이템 복제 가능 (테스트 및 거래용)
+- `drop`: 아이템 소멸 가능 (소모품 사용 시)
+- `store`: 글로벌 스토리지에 저장 가능 (인벤토리)
+
+**필드 설명:**
+- `id`: 고유 식별자 (u64로 충분한 범위 제공)
+- `name`: 사용자 친화적 아이템 이름
+- `item_type`: 아이템 카테고리 (상수 참조)
+- `power`: 효과 강도 (무기 데미지, 물약 회복량 등)
+
+### 플레이어 구조체
+```move
+    struct Player has key {
+        level: u8,
+        exp: u64,
+        health: u64,
+        mana: u64,
+        max_health: u64,
+        max_mana: u64,
+        inventory: vector<Item>,
+        equipped_sword: option::Option<Item>,
+        equipped_shield: option::Option<Item>,
+        equipped_armor: option::Option<Item>,
+    }
+```
+
+**리소스 설계:**
+- `has key`: 글로벌 스토리지의 최상위 리소스로 저장 가능
+- `level: u8`: 1-255 레벨 지원 (대부분 게임에 충분)
+- `exp: u64`: 대용량 경험치 처리 가능
+- `inventory: vector<Item>`: 동적 크기 인벤토리
+- `equipped_*: option::Option<Item>`: 선택적 장비 슬롯
+
+### 플레이어 초기화
+```move
+    /// 기본 스탯과 빈 인벤토리로 새 플레이어 초기화
+    public fun init_player(account: &signer) {
+        move_to(account, Player {
+            level: 1,
+            exp: 0,
+            health: 100,
+            mana: 50,
+            max_health: 100,
+            max_mana: 50,
+            inventory: vector::empty<Item>(),
+            equipped_sword: option::none<Item>(),
+            equipped_shield: option::none<Item>(),
+            equipped_armor: option::none<Item>(),
+        });
+    }
+```
+
+**초기화 전략:**
+- `move_to(account, Player {...})`: 플레이어 리소스를 계정 주소에 저장
+- 균형잡힌 초기 스탯으로 게임 시작
+- 빈 컨테이너들을 안전하게 초기화
+
+### 인벤토리 관리 시스템
+```move
+    /// 플레이어 인벤토리에 아이템 추가
+    public fun add_item(account: &signer, item: Item) acquires Player {
+        let player = borrow_global_mut<Player>(signer::address_of(account));
+        vector::push_back(&mut player.inventory, item);
+    }
+```
+
+**메모리 관리:**
+- `acquires Player`: Move 컴파일러에게 Player 리소스 접근을 알림
+- `borrow_global_mut`: 플레이어 리소스의 가변 참조 획득
+- `signer::address_of(account)`: 서명자를 계정 주소로 변환
+
+### 아이템 생성 헬퍼
+```move
+    /// 테스트 및 개발용 아이템 생성 함수
+    public fun make_item(id: u64, name: string::String, item_type: u8, power: u64): Item {
+        Item { id, name, item_type, power }
+    }
+    
+    /// 아이템 타입 상수 접근자
+    public fun type_sword(): u8 { TYPE_SWORD }
+    public fun type_shield(): u8 { TYPE_SHIELD }
+    public fun type_armor(): u8 { TYPE_ARMOR }
+    public fun type_potion(): u8 { TYPE_POTION }
+```
+
+## ⚔️ 장비 시스템
+
+### 검 장착
+```move
+    /// 인벤토리에서 검을 장착
+    public fun equip_sword(account: &signer, item_id: u64): bool acquires Player {
+        let player = borrow_global_mut<Player>(signer::address_of(account));
+        equip_specific(&mut player.inventory, item_id, TYPE_SWORD, &mut player.equipped_sword)
+    }
+```
+
+### 범용 장비 로직
+```move
+    /// 특정 타입의 아이템을 인벤토리에서 찾아 장착
+    fun equip_specific(
+        inventory: &mut vector<Item>, 
+        item_id: u64, 
+        required_type: u8,
+        equip_slot: &mut option::Option<Item>
+    ): bool {
+        let i = 0;
+        let len = vector::length(inventory);
+        while (i < len) {
+            let item_ref = vector::borrow(inventory, i);
+            if (item_ref.id == item_id && item_ref.item_type == required_type) {
+                let item = vector::remove(inventory, i);
+                *equip_slot = option::some(item);
+                return true;
+            };
+            i = i + 1;
+        };
+        false
+    }
+```
+
+**알고리즘 분석:**
+- 선형 검색으로 O(n) 복잡도
+- `vector::remove`로 아이템을 인벤토리에서 장비 슬롯으로 이동
+- 타입 검증으로 잘못된 장비 방지
+- 불린 반환으로 성공/실패 표시
+
+### 방패 및 갑옷 장착
+```move
+    /// 인벤토리에서 방패를 장착
+    public fun equip_shield(account: &signer, item_id: u64): bool acquires Player {
+        let player = borrow_global_mut<Player>(signer::address_of(account));
+        equip_specific(&mut player.inventory, item_id, TYPE_SHIELD, &mut player.equipped_shield)
+    }
+
+    /// 인벤토리에서 갑옷을 장착
+    public fun equip_armor(account: &signer, item_id: u64): bool acquires Player {
+        let player = borrow_global_mut<Player>(signer::address_of(account));
+        equip_specific(&mut player.inventory, item_id, TYPE_ARMOR, &mut player.equipped_armor)
+    }
+```
+
+## 🧪 물약 시스템
+
+### 체력 회복 물약
+```move
+    /// 물약을 사용하여 체력 회복
+    public fun use_potion(account: &signer, item_id: u64): bool acquires Player {
+        let player = borrow_global_mut<Player>(signer::address_of(account));
+        let i = 0;
+        let len = vector::length(&player.inventory);
+        while (i < len) {
+            let item_ref = vector::borrow(&player.inventory, i);
+            if (item_ref.id == item_id && item_ref.item_type == TYPE_POTION) {
+                let potion = vector::remove(&mut player.inventory, i);
+                player.health = min(player.health + potion.power, player.max_health);
+                return true;
+            };
+            i = i + 1;
+        };
+        false
+    }
+```
+
+**회복 메커니즘:**
+- `min(current + heal, max)`: 최대 체력 초과 방지
+- 물약 소모: 인벤토리에서 제거
+- 안전한 타입 검증
+
+## ⚔️ 전투 시스템
+
+### 적 공격 메커니즘
+```move
+    /// 플레이어가 적을 공격. 적이 생존하면 반격. 적이 죽으면 경험치 획득.
+    public fun attack_enemy(account: &signer, enemy: &mut enemies::Enemy): bool acquires Player {
+        let player = borrow_global_mut<Player>(signer::address_of(account));
+
+        // 데미지 계산 (장착된 무기 고려)
+        let damage = if (option::is_some(&player.equipped_sword)) {
+            let sword_ref = option::borrow(&player.equipped_sword);
+            sword_ref.power
+        } else {
+            5 // 기본 공격력
+        };
+
+        let killed = enemies::take_damage(enemy, damage);
+
+        if (killed) {
+            // 적 처치 시 경험치 획득
+            slay_enemy(account, enemies::get_exp_reward(enemy));
+            true
+        } else {
+            // 적 생존 시 반격
+            let enemy_attack = enemies::get_attack(enemy);
+            if (player.health <= enemy_attack) {
+                player.health = 0; // 플레이어 사망
+            } else {
+                player.health = player.health - enemy_attack;
+            };
+            false
+        }
+    }
+```
+
+**전투 흐름:**
+1. **데미지 계산**: 장착 무기 파워 또는 기본 공격력
+2. **적 피해 적용**: enemies 모듈의 `take_damage` 호출
+3. **결과 분기**:
+   - 적 처치: 경험치 보상
+   - 적 생존: 반격으로 플레이어 피해
+
+### 경험치 및 레벨업 시스템
+```move
+    /// 적 처치 시 경험치 보상 및 레벨업 처리
+    public fun slay_enemy(account: &signer, exp_reward: u64) acquires Player {
+        let player = borrow_global_mut<Player>(signer::address_of(account));
+        player.exp = player.exp + exp_reward;
+
+        let required_exp = exp_required(player.level);
+        while (player.exp >= required_exp) {
+            player.exp = player.exp - required_exp;
+            player.level = player.level + 1;
+            player.max_health = player.max_health + 20;
+            player.max_mana = player.max_mana + 10;
+            player.health = player.max_health; // 레벨업 시 완전 회복
+            player.mana = player.max_mana;
+            required_exp = exp_required(player.level);
+        };
+    }
+```
+
+**레벨업 메커니즘:**
+- 연속 레벨업 지원 (`while` 루프)
+- 레벨당 체력 +20, 마나 +10 성장
+- 레벨업 시 완전 회복
+- 사용된 경험치 차감
+
+### 지수적 경험치 시스템
+```move
+    /// 레벨업에 필요한 경험치 (지수적 증가)
+    fun exp_required(level: u8): u64 {
+        100 * (1u64 << (level - 1))
+    }
+```
+
+**경험치 곡선:**
+- 레벨 1→2: 100 EXP (2^0 * 100)
+- 레벨 2→3: 200 EXP (2^1 * 100)  
+- 레벨 3→4: 400 EXP (2^2 * 100)
+- 지수적 증가로 후반부 도전 제공
+
+## 🛠️ 유틸리티 함수
+
+### 수학 헬퍼
+```move
+    /// 두 값 중 최솟값 반환
+    fun min(a: u64, b: u64): u64 {
+        if (a < b) a else b
+    }
+
+    /// 두 값 중 최댓값 반환  
+    fun max(a: u64, b: u64): u64 {
+        if (a > b) a else b
+    }
+```
+
+### 공개 게터 함수
+```move
+    /// 플레이어 정보 조회용 공개 함수들
+    public fun get_level(player: &Player): u8 { player.level }
+    public fun get_exp(player: &Player): u64 { player.exp }
+    public fun get_health(player: &Player): u64 { player.health }
+    public fun get_mana(player: &Player): u64 { player.mana }
+    public fun get_max_health(player: &Player): u64 { player.max_health }
+    public fun get_max_mana(player: &Player): u64 { player.max_mana }
+    
+    /// 인벤토리 정보 조회
+    public fun get_inventory_length(player: &Player): u64 {
+        vector::length(&player.inventory)
+    }
+    
+    /// 장착 장비 확인
+    public fun has_equipped_sword(player: &Player): bool {
+        option::is_some(&player.equipped_sword)
+    }
+    
+    public fun has_equipped_shield(player: &Player): bool {
+        option::is_some(&player.equipped_shield)
+    }
+    
+    public fun has_equipped_armor(player: &Player): bool {
+        option::is_some(&player.equipped_armor)
+    }
+```
+
+## 🐗 모듈 2: 적 시스템 (enemies.move)
+
+### 모듈 구조
+```move
+module move_slayers::enemies {
+    use std::string;
+```
+
+### 적 구조체
+```move
+    /// 적 정의
+    struct Enemy has copy, drop, store {
+        name: string::String,
+        health: u64,
+        attack: u64,
+        exp_reward: u64,
+    }
+```
+
+**적 능력:**
+- `copy, drop, store`: 복제, 소멸, 저장 가능
+- 이름, 체력, 공격력, 경험치 보상의 기본 속성
+
+### 적 생성 팩토리
+```move
+    /// 초반 게임용 약한 멧돼지 생성
+    public fun spawn_boar(): Enemy {
+        Enemy {
+            name: string::utf8(b"Boar"),
+            health: 30,
+            attack: 5,
+            exp_reward: 50,
+        }
+    }
+    
+    /// 중급 적: 늑대
+    public fun spawn_wolf(): Enemy {
+        Enemy {
+            name: string::utf8(b"Wolf"),
+            health: 60,
+            attack: 12,
+            exp_reward: 120,
+        }
+    }
+    
+    /// 고급 적: 오크
+    public fun spawn_orc(): Enemy {
+        Enemy {
+            name: string::utf8(b"Orc"),
+            health: 100,
+            attack: 20,
+            exp_reward: 200,
+        }
+    }
+```
+
+### 전투 상호작용
+```move
+    /// 적에게 피해를 입힘. 적이 죽으면 true 반환.
+    public fun take_damage(enemy: &mut Enemy, amount: u64): bool {
+        if (enemy.health <= amount) {
+            enemy.health = 0;
+            true
+        } else {
+            enemy.health = enemy.health - amount;
+            false
+        }
+    }
+```
+
+### 적 정보 접근자
+```move
+    /// 적 정보 조회용 공개 함수들
+    public fun get_health(enemy: &Enemy): u64 { enemy.health }
+    public fun get_attack(enemy: &Enemy): u64 { enemy.attack }
+    public fun get_exp_reward(enemy: &Enemy): u64 { enemy.exp_reward }
+    public fun get_name(enemy: &Enemy): &string::String { &enemy.name }
+    
+    /// 적이 살아있는지 확인
+    public fun is_alive(enemy: &Enemy): bool {
+        enemy.health > 0
+    }
+```
+
+### 커스텀 적 생성
+```move
+    /// 테스트 및 확장용 적 팩토리
+    public fun make_enemy(
+        name: string::String, 
+        health: u64, 
+        attack: u64, 
+        exp_reward: u64
+    ): Enemy {
+        Enemy { name, health, attack, exp_reward }
+    }
+```
+
+## 🧪 모듈 3: 종합 테스트 (hero_tests.move)
+
+### 테스트 모듈 설정
+```move
+#[test_only]
+module move_slayers::hero_tests {
+    use std::signer;
+    use std::string;
+    use std::vector;
+    use std::option;
+    use std::account;
+    use move_slayers::hero;
+    use move_slayers::enemies;
+```
+
+### 테스트 헬퍼
+```move
+    // 테스트 계정 주소
+    const PLAYER_ADDR: address = @0x1;
+
+    // 테스트 서명자 생성 헬퍼
+    fun create_test_signer(): signer {
+        account::create_account_for_test(PLAYER_ADDR)
+    }
+    
+    // 테스트용 기본 아이템들
+    fun create_test_sword(): hero::Item {
+        hero::make_item(1, string::utf8(b"Iron Sword"), hero::type_sword(), 15)
+    }
+    
+    fun create_test_shield(): hero::Item {
+        hero::make_item(2, string::utf8(b"Wooden Shield"), hero::type_shield(), 8)
+    }
+    
+    fun create_test_potion(): hero::Item {
+        hero::make_item(3, string::utf8(b"Health Potion"), hero::type_potion(), 25)
+    }
+```
+
+### 플레이어 생성 테스트
+```move
+    #[test]
+    fun test_hero_creation() {
+        let player = create_test_signer();
+        hero::init_player(&player);
+        
+        // 플레이어가 성공적으로 생성되었는지 아이템 추가로 확인
+        let test_item = create_test_sword();
+        hero::add_item(&player, test_item);
+    }
+```
+
+### 인벤토리 시스템 테스트
+```move
+    #[test]
+    fun test_inventory_management() {
+        let player = create_test_signer();
+        hero::init_player(&player);
+        
+        // 여러 아이템 추가
+        hero::add_item(&player, create_test_sword());
+        hero::add_item(&player, create_test_shield());
+        hero::add_item(&player, create_test_potion());
+        
+        // 인벤토리 길이 확인 로직은 실제 구현에서 추가 필요
+    }
+```
+
+### 장비 시스템 테스트
+```move
+    #[test]
+    fun test_equipment_system() {
+        let player = create_test_signer();
+        hero::init_player(&player);
+        
+        // 아이템 추가 후 장착
+        let sword = create_test_sword();
+        hero::add_item(&player, sword);
+        
+        // 검 장착 테스트
+        let equipped = hero::equip_sword(&player, 1);
+        assert!(equipped, 0); // 장착 성공 확인
+        
+        // 방패도 동일하게 테스트
+        let shield = create_test_shield();
+        hero::add_item(&player, shield);
+        let shield_equipped = hero::equip_shield(&player, 2);
+        assert!(shield_equipped, 1);
+    }
+```
+
+### 물약 사용 테스트
+```move
+    #[test]
+    fun test_potion_usage() {
+        let player = create_test_signer();
+        hero::init_player(&player);
+        
+        // 체력을 임의로 감소시킬 수 없으므로, 
+        // 전투 후 물약 사용 테스트로 구현
+        let potion = create_test_potion();
+        hero::add_item(&player, potion);
+        
+        let used = hero::use_potion(&player, 3);
+        assert!(used, 0); // 물약 사용 성공 확인
+    }
+```
+
+### 전투 시스템 테스트
+```move
+    #[test]
+    fun test_combat_system() {
+        let player = create_test_signer();
+        hero::init_player(&player);
+        
+        // 검 장착
+        let sword = create_test_sword();
+        hero::add_item(&player, sword);
+        hero::equip_sword(&player, 1);
+        
+        // 적 생성
+        let mut boar = enemies::spawn_boar();
+        
+        // 전투 테스트
+        let result = hero::attack_enemy(&player, &mut boar);
+        
+        // 멧돼지가 죽었거나 반격했을 것
+        if (result) {
+            // 적 처치 - 경험치 획득 확인 가능
+            assert!(!enemies::is_alive(&boar), 0);
+        } else {
+            // 적 생존 - 플레이어가 피해를 받았을 것
+            assert!(enemies::is_alive(&boar), 1);
+        }
+    }
+```
+
+### 레벨링 시스템 테스트
+```move
+    #[test]
+    fun test_leveling_system() {
+        let player = create_test_signer();
+        hero::init_player(&player);
+        
+        // 충분한 경험치로 직접 레벨업 테스트
+        hero::slay_enemy(&player, 100); // 레벨 1->2에 필요한 경험치
+        
+        // 추가 경험치로 여러 레벨 테스트
+        hero::slay_enemy(&player, 300); // 레벨 2->3 (200) + 추가 100
+    }
+```
+
+### 통합 게임플레이 테스트
+```move
+    #[test]
+    fun test_complete_gameplay_flow() {
+        let player = create_test_signer();
+        hero::init_player(&player);
+        
+        // 1. 장비 획득 및 장착
+        hero::add_item(&player, create_test_sword());
+        hero::add_item(&player, create_test_shield());
+        hero::add_item(&player, create_test_potion());
+        
+        hero::equip_sword(&player, 1);
+        hero::equip_shield(&player, 2);
+        
+        // 2. 여러 적과 전투
+        let mut boar1 = enemies::spawn_boar();
+        let mut boar2 = enemies::spawn_boar();
+        let mut wolf = enemies::spawn_wolf();
+        
+        // 멧돼지들과 전투
+        hero::attack_enemy(&player, &mut boar1);
+        hero::attack_enemy(&player, &mut boar2);
+        
+        // 필요시 물약 사용
+        hero::use_potion(&player, 3);
+        
+        // 늑대와 전투 (더 강한 적)
+        hero::attack_enemy(&player, &mut wolf);
+        
+        // 게임 상태가 일관성 있게 유지되는지 확인
+    }
+```
+
+## 🚀 TypeScript SDK 통합
+
+### Move Slayers 게임 클라이언트
+```typescript
+import {
+  MovementClient,
+  MovementAccount,
+  Network
+} from "@movementnetwork/ts-sdk";
+
+interface PlayerStats {
+  level: number;
+  exp: number;
+  health: number;
+  mana: number;
+  maxHealth: number;
+  maxMana: number;
+}
+
+interface GameItem {
+  id: number;
+  name: string;
+  itemType: number;
+  power: number;
+}
+
+interface Enemy {
+  name: string;
+  health: number;
+  attack: number;
+  expReward: number;
+}
+
+class MoveSlayersClient {
+  private client: MovementClient;
+  private moduleAddress: string;
+  
+  constructor(client: MovementClient, moduleAddress: string) {
+    this.client = client;
+    this.moduleAddress = moduleAddress;
+  }
+  
+  // 플레이어 초기화
+  async initializePlayer(account: MovementAccount): Promise<string> {
+    const payload = {
+      type: "entry_function_payload",
+      function: `${this.moduleAddress}::hero::init_player`,
+      type_arguments: [],
+      arguments: []
+    };
+    
+    const txn = await this.client.generateTransaction(account.address(), payload);
+    const signedTxn = await this.client.signTransaction(account, txn);
+    const response = await this.client.submitTransaction(signedTxn);
+    
+    await this.client.waitForTransaction(response.hash);
+    return response.hash;
+  }
+  
+  // 플레이어 정보 조회
+  async getPlayerStats(playerAddress: string): Promise<PlayerStats | null> {
+    try {
+      const playerResource = await this.client.getAccountResource(
+        playerAddress,
+        `${this.moduleAddress}::hero::Player`
+      );
+      
+      if (!playerResource) return null;
+      
+      const data = playerResource.data as any;
+      return {
+        level: parseInt(data.level),
+        exp: parseInt(data.exp),
+        health: parseInt(data.health),
+        mana: parseInt(data.mana),
+        maxHealth: parseInt(data.max_health),
+        maxMana: parseInt(data.max_mana)
+      };
+    } catch (error) {
+      console.error("Failed to get player stats:", error);
+      return null;
+    }
+  }
+  
+  // 아이템 추가
+  async addItem(
+    account: MovementAccount,
+    id: number,
+    name: string,
+    itemType: number,
+    power: number
+  ): Promise<string> {
+    const payload = {
+      type: "entry_function_payload",
+      function: `${this.moduleAddress}::hero::add_item`,
+      type_arguments: [],
+      arguments: [
+        {
+          id: id.toString(),
+          name,
+          item_type: itemType.toString(),
+          power: power.toString()
+        }
+      ]
+    };
+    
+    const txn = await this.client.generateTransaction(account.address(), payload);
+    const signedTxn = await this.client.signTransaction(account, txn);
+    const response = await this.client.submitTransaction(signedTxn);
+    
+    await this.client.waitForTransaction(response.hash);
+    return response.hash;
+  }
+  
+  // 장비 착용
+  async equipSword(account: MovementAccount, itemId: number): Promise<{
+    success: boolean;
+    transactionHash: string;
+  }> {
+    try {
+      const payload = {
+        type: "entry_function_payload",
+        function: `${this.moduleAddress}::hero::equip_sword`,
+        type_arguments: [],
+        arguments: [itemId.toString()]
+      };
+      
+      const txn = await this.client.generateTransaction(account.address(), payload);
+      const signedTxn = await this.client.signTransaction(account, txn);
+      const response = await this.client.submitTransaction(signedTxn);
+      
+      await this.client.waitForTransaction(response.hash);
+      
+      return {
+        success: true,
+        transactionHash: response.hash
+      };
+    } catch (error) {
+      return {
+        success: false,
+        transactionHash: ""
+      };
+    }
+  }
+  
+  // 물약 사용
+  async usePotion(account: MovementAccount, itemId: number): Promise<{
+    success: boolean;
+    transactionHash: string;
+  }> {
+    try {
+      const payload = {
+        type: "entry_function_payload",
+        function: `${this.moduleAddress}::hero::use_potion`,
+        type_arguments: [],
+        arguments: [itemId.toString()]
+      };
+      
+      const txn = await this.client.generateTransaction(account.address(), payload);
+      const signedTxn = await this.client.signTransaction(account, txn);
+      const response = await this.client.submitTransaction(signedTxn);
+      
+      await this.client.waitForTransaction(response.hash);
+      
+      return {
+        success: true,
+        transactionHash: response.hash
+      };
+    } catch (error) {
+      return {
+        success: false,
+        transactionHash: ""
+      };
+    }
+  }
+  
+  // 적 생성
+  async spawnEnemy(enemyType: 'boar' | 'wolf' | 'orc'): Promise<Enemy> {
+    // 클라이언트 사이드에서 적 정보 반환 (실제 게임에서는 서버에서 관리)
+    const enemies = {
+      boar: { name: "Boar", health: 30, attack: 5, expReward: 50 },
+      wolf: { name: "Wolf", health: 60, attack: 12, expReward: 120 },
+      orc: { name: "Orc", health: 100, attack: 20, expReward: 200 }
+    };
+    
+    return enemies[enemyType];
+  }
+  
+  // 전투 실행
+  async attackEnemy(
+    account: MovementAccount,
+    enemy: Enemy
+  ): Promise<{
+    playerWon: boolean;
+    enemyDefeated: boolean;
+    expGained: number;
+    transactionHash: string;
+  }> {
+    // 실제로는 Move 컨트랙트에서 전투 로직 실행
+    // 여기서는 시뮬레이션
+    const payload = {
+      type: "entry_function_payload",
+      function: `${this.moduleAddress}::hero::attack_enemy`,
+      type_arguments: [],
+      arguments: [
+        // Enemy 구조체를 인자로 전달
+        enemy
+      ]
+    };
+    
+    try {
+      const txn = await this.client.generateTransaction(account.address(), payload);
+      const signedTxn = await this.client.signTransaction(account, txn);
+      const response = await this.client.submitTransaction(signedTxn);
+      
+      await this.client.waitForTransaction(response.hash);
+      
+      // 실제로는 트랜잭션 결과에서 전투 결과 파싱
+      return {
+        playerWon: true,
+        enemyDefeated: true,
+        expGained: enemy.expReward,
+        transactionHash: response.hash
+      };
+    } catch (error) {
+      throw new Error(`Combat failed: ${error}`);
+    }
+  }
+  
+  // 게임 상태 실시간 모니터링
+  async monitorGameEvents(
+    playerAddress: string,
+    callback: (event: any) => void
+  ): Promise<void> {
+    const pollInterval = 2000; // 2초마다
+    
+    const poll = async () => {
+      try {
+        const currentStats = await this.getPlayerStats(playerAddress);
+        callback({
+          type: 'player_stats_update',
+          stats: currentStats,
+          timestamp: Date.now()
+        });
+      } catch (error) {
+        console.error("Failed to poll game state:", error);
+      }
+      
+      setTimeout(poll, pollInterval);
+    };
+    
+    poll();
+  }
+}
+
+// React 게임 컴포넌트 예시
+interface GameComponentProps {
+  gameClient: MoveSlayersClient;
+  playerAccount: MovementAccount;
+}
+
+function MoveSlayersGame({ gameClient, playerAccount }: GameComponentProps) {
+  const [playerStats, setPlayerStats] = useState<PlayerStats | null>(null);
+  const [currentEnemy, setCurrentEnemy] = useState<Enemy | null>(null);
+  const [gameLog, setGameLog] = useState<string[]>([]);
+  
+  useEffect(() => {
+    // 게임 상태 모니터링 시작
+    gameClient.monitorGameEvents(playerAccount.address(), (event) => {
+      if (event.type === 'player_stats_update') {
+        setPlayerStats(event.stats);
+      }
+    });
+    
+    // 초기 플레이어 정보 로드
+    loadPlayerStats();
+  }, []);
+  
+  const loadPlayerStats = async () => {
+    const stats = await gameClient.getPlayerStats(playerAccount.address());
+    setPlayerStats(stats);
+  };
+  
+  const spawnRandomEnemy = async () => {
+    const enemyTypes: ('boar' | 'wolf' | 'orc')[] = ['boar', 'wolf', 'orc'];
+    const randomType = enemyTypes[Math.floor(Math.random() * enemyTypes.length)];
+    const enemy = await gameClient.spawnEnemy(randomType);
+    setCurrentEnemy(enemy);
+    
+    addToGameLog(`A wild ${enemy.name} appears!`);
+  };
+  
+  const attackCurrentEnemy = async () => {
+    if (!currentEnemy) return;
+    
+    try {
+      const result = await gameClient.attackEnemy(playerAccount, currentEnemy);
+      
+      if (result.enemyDefeated) {
+        addToGameLog(`You defeated the ${currentEnemy.name}! Gained ${result.expGained} EXP.`);
+        setCurrentEnemy(null);
+      } else {
+        addToGameLog(`You attacked the ${currentEnemy.name}, but it survived and counterattacked!`);
+      }
+      
+      // 플레이어 정보 새로고침
+      await loadPlayerStats();
+    } catch (error) {
+      addToGameLog(`Combat failed: ${error}`);
+    }
+  };
+  
+  const addToGameLog = (message: string) => {
+    setGameLog(prev => [...prev.slice(-9), `${new Date().toLocaleTimeString()}: ${message}`]);
+  };
+  
+  return (
+    <div className="move-slayers-game p-6 max-w-4xl mx-auto">
+      <h1 className="text-3xl font-bold mb-6">🎮 Move Slayers RPG</h1>
+      
+      {/* 플레이어 정보 */}
+      {playerStats && (
+        <div className="player-stats bg-blue-100 p-4 rounded-lg mb-6">
+          <h2 className="text-xl font-bold mb-2">👤 Player Stats</h2>
+          <div className="grid grid-cols-3 gap-4">
+            <div>Level: {playerStats.level}</div>
+            <div>EXP: {playerStats.exp}</div>
+            <div>HP: {playerStats.health}/{playerStats.maxHealth}</div>
+            <div>MP: {playerStats.mana}/{playerStats.maxMana}</div>
+          </div>
+        </div>
+      )}
+      
+      {/* 전투 영역 */}
+      <div className="combat-area bg-red-100 p-4 rounded-lg mb-6">
+        <h2 className="text-xl font-bold mb-2">⚔️ Combat</h2>
+        {currentEnemy ? (
+          <div>
+            <p className="mb-2">🐗 {currentEnemy.name} (HP: {currentEnemy.health}, ATK: {currentEnemy.attack})</p>
+            <button 
+              onClick={attackCurrentEnemy}
+              className="bg-red-500 text-white px-4 py-2 rounded mr-2"
+            >
+              Attack!
+            </button>
+          </div>
+        ) : (
+          <button 
+            onClick={spawnRandomEnemy}
+            className="bg-green-500 text-white px-4 py-2 rounded"
+          >
+            Find Enemy
+          </button>
+        )}
+      </div>
+      
+      {/* 게임 로그 */}
+      <div className="game-log bg-gray-100 p-4 rounded-lg">
+        <h2 className="text-xl font-bold mb-2">📜 Game Log</h2>
+        <div className="max-h-40 overflow-y-auto">
+          {gameLog.map((log, index) => (
+            <div key={index} className="text-sm">{log}</div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// 사용 예시
+async function startMoveSlayersGame() {
+  const client = new MovementClient({ network: Network.TESTNET });
+  const gameClient = new MoveSlayersClient(client, "0x1::move_slayers");
+  
+  const playerAccount = new MovementAccount();
+  
+  // 플레이어 초기화
+  await gameClient.initializePlayer(playerAccount);
+  
+  // 기본 장비 지급
+  await gameClient.addItem(playerAccount, 1, "Starter Sword", 0, 10);
+  await gameClient.addItem(playerAccount, 2, "Health Potion", 3, 25);
+  
+  // 게임 시작
+  console.log("Move Slayers RPG started!");
+}
+
+export { MoveSlayersClient, type PlayerStats, type GameItem, type Enemy };
+```
+
+## 🎯 핵심 학습 포인트
+
+### 1. 리소스 안전성
+```move
+// ✅ Move의 리소스 시스템
+struct Player has key {
+    // 플레이어는 복제되거나 실수로 소실될 수 없음
+}
+
+// ✅ 안전한 리소스 이동
+move_to(account, Player { ... }); // 계정으로 리소스 이동
+let player = borrow_global_mut<Player>(addr); // 안전한 참조
+```
+
+### 2. 모듈화 설계
+```move
+// ✅ 관심사 분리
+module move_slayers::hero {    // 플레이어 로직
+module move_slayers::enemies { // 적 시스템
+```
+
+### 3. 온체인 상태 관리
+```move
+// ✅ 글로벌 스토리지 활용
+public fun init_player(account: &signer) {
+    move_to(account, Player { ... }); // 계정에 플레이어 데이터 저장
+}
+```
+
+### 4. 에러 처리
+```move
+// ✅ 불린 반환으로 성공/실패 표시
+public fun equip_sword(account: &signer, item_id: u64): bool
+```
+
+### 5. 테스트 주도 개발
+```move
+#[test]
+fun test_complete_gameplay_flow() {
+    // 전체 게임플레이 흐름 테스트
+}
+```
+
+## 🚀 확장 아이디어
+
+### 즉시 구현 가능한 기능들:
+
+#### 🏪 **아이템 상점 시스템**
+```move
+module move_slayers::shop {
+    struct Shop has key {
+        items: vector<ShopItem>,
+        gold_prices: vector<u64>,
+    }
+    
+    public fun buy_item(account: &signer, shop_item_id: u64) {
+        // 골드 차감 후 아이템 지급
+    }
+}
+```
+
+#### 🏰 **던전 시스템**
+```move
+module move_slayers::dungeons {
+    struct Dungeon has key {
+        name: string::String,
+        floors: vector<Floor>,
+        entry_cost: u64,
+    }
+    
+    public fun enter_dungeon(account: &signer, dungeon_id: u64) {
+        // 던전 입장 및 진행 로직
+    }
+}
+```
+
+#### 🎯 **퀘스트 시스템**
+```move
+module move_slayers::quests {
+    struct Quest has copy, drop, store {
+        id: u64,
+        title: string::String,
+        description: string::String,
+        requirements: QuestRequirements,
+        rewards: QuestRewards,
+        completed: bool,
+    }
+}
+```
+
+#### 👥 **길드 시스템**
+```move
+module move_slayers::guilds {
+    struct Guild has key {
+        name: string::String,
+        members: vector<address>,
+        guild_level: u64,
+        treasury: u64,
+    }
+}
+```
+
+### 고급 확장 기능들:
+
+#### 💎 **NFT 통합**
+- 독특한 아이템을 NFT로 발행
+- 플레이어 캐릭터를 NFT로 거래 가능
+- 길드 휘장 및 업적 NFT
+
+#### 🌐 **멀티플레이어 기능**
+- 실시간 PvP 전투
+- 협동 레이드 던전
+- 리더보드 시스템
+
+#### 💰 **게임 경제**
+- 게임 내 화폐 시스템
+- 플레이어 간 거래
+- 경매장 시스템
+
+## 📚 추가 학습 자료
+
+### Move 언어 심화
+- [Move Book](https://move-language.github.io/move/)
+- [Movement 개발자 문서](https://docs.movementnetwork.xyz/)
+- [Move 패턴 및 관용구](https://github.com/move-language/move/tree/main/language/documentation/examples)
+
+### 게임 개발 리소스
+- [온체인 게임 설계 패턴](https://ethereum.org/en/developers/docs/gaming/)
+- [블록체인 게임 경제학](https://medium.com/blockchain-game-alliance)
+- [Web3 게임 개발 가이드](https://docs.alchemy.com/docs/how-to-build-a-web3-game)
+
+### Movement 생태계
+- [Movement Discord](https://discord.gg/movementnetwork)
+- [Movement GitHub](https://github.com/movementlabsxyz)
+- [개발자 포럼](https://forum.movementnetwork.xyz)
+
+---
+
+**축하합니다!** 🎉 
+
+이제 Move 언어로 완전한 온체인 RPG를 구축할 수 있습니다. Move Slayers는 시작점일 뿐입니다. 여러분의 창의력으로 더욱 흥미진진한 블록체인 게임을 만들어보세요!
+
+*Movement Network에서 차세대 게임의 미래를 개척하세요!* 🎮✨

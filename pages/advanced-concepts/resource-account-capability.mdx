@@ -1,0 +1,1029 @@
+# 🔐 Resource Account & Capability
+
+Movement Network의 고급 권한 관리 시스템인 Resource Account와 Capability 패턴을 심화 학습합니다. 프로그래밍 가능한 계정과 세밀한 권한 제어로 보안성과 유연성을 동시에 확보하는 방법을 다룹니다.
+
+## 🎯 학습 목표
+
+이 섹션을 완료하면:
+- Resource Account의 개념과 생성 방법을 완전히 이해할 수 있습니다
+- Capability 기반 권한 제어 시스템을 설계하고 구현할 수 있습니다
+- 다중 서명과 시간 기반 권한을 구현할 수 있습니다
+- 복잡한 권한 위임 체계를 구축할 수 있습니다
+
+## 🏢 Resource Account 심화
+
+### Resource Account란?
+```
+Resource Account = 프로그래밍 가능한 계정
+
+일반 계정 (EOA):
+├── 개인 키로 제어
+├── 사람이 직접 서명
+├── 단순한 권한 구조
+└── 제한적인 자동화
+
+Resource Account:
+├── 스마트 계약으로 제어  
+├── 프로그래밍된 로직으로 서명
+├── 복잡한 권한 위임 가능
+└── 완전한 자동화 지원
+```
+
+### Resource Account 생성과 관리
+```move
+module resource_account_manager {
+    use std::signer;
+    use std::vector;
+    use std::string::{Self, String};
+    use aptos_framework::account::{Self, SignerCapability};
+    use aptos_framework::resource_account;
+    use aptos_framework::timestamp;
+    
+    /// Resource Account 레지스트리
+    struct ResourceAccountRegistry has key {
+        accounts: SmartTable<String, ResourceAccountInfo>,
+        total_created: u64,
+        admin: address
+    }
+    
+    struct ResourceAccountInfo has store, drop {
+        address: address,
+        creator: address,
+        purpose: String,
+        created_at: u64,
+        signer_cap: SignerCapability,
+        permissions: vector<Permission>,
+        is_active: bool
+    }
+    
+    struct Permission has store, drop, copy {
+        permission_type: u8,  // 0: transfer, 1: module_publish, 2: admin
+        allowed_addresses: vector<address>,
+        expiry: Option<u64>
+    }
+    
+    /// Resource Account 생성 (고급 패턴)
+    public fun create_managed_resource_account(
+        creator: &signer,
+        seed: vector<u8>,
+        purpose: String,
+        initial_permissions: vector<Permission>
+    ): address acquires ResourceAccountRegistry {
+        let creator_addr = signer::address_of(creator);
+        
+        // Resource Account 생성
+        let (resource_signer, signer_cap) = account::create_resource_account(
+            creator,
+            seed
+        );
+        let resource_addr = signer::address_of(&resource_signer);
+        
+        // 레지스트리 업데이트
+        let registry = borrow_global_mut<ResourceAccountRegistry>(@admin);
+        let account_name = generate_account_name(purpose, registry.total_created);
+        
+        let account_info = ResourceAccountInfo {
+            address: resource_addr,
+            creator: creator_addr,
+            purpose,
+            created_at: timestamp::now_seconds(),
+            signer_cap,
+            permissions: initial_permissions,
+            is_active: true
+        };
+        
+        smart_table::add(&mut registry.accounts, account_name, account_info);
+        registry.total_created = registry.total_created + 1;
+        
+        // 초기 설정 수행
+        initialize_resource_account(&resource_signer, initial_permissions);
+        
+        resource_addr
+    }
+    
+    /// Resource Account를 통한 프로그래밍된 트랜잭션 실행
+    public fun execute_as_resource_account<T>(
+        executor: &signer,
+        account_name: String,
+        operation: |&signer|T
+    ): T acquires ResourceAccountRegistry {
+        let executor_addr = signer::address_of(executor);
+        let registry = borrow_global<ResourceAccountRegistry>(@admin);
+        
+        assert!(smart_table::contains(&registry.accounts, account_name), E_ACCOUNT_NOT_FOUND);
+        let account_info = smart_table::borrow(&registry.accounts, account_name);
+        
+        // 권한 확인
+        assert!(has_permission(account_info, executor_addr, EXECUTE_PERMISSION), E_NO_PERMISSION);
+        assert!(account_info.is_active, E_ACCOUNT_INACTIVE);
+        
+        // Resource Account의 signer 생성
+        let resource_signer = account::create_signer_with_capability(&account_info.signer_cap);
+        
+        // 프로그래밍된 작업 실행
+        operation(&resource_signer)
+    }
+    
+    /// 배치 트랜잭션 실행 (가스 효율적)
+    public fun batch_execute_as_resource_account(
+        executor: &signer,
+        account_name: String,
+        operations: vector<BatchOperation>
+    ) acquires ResourceAccountRegistry {
+        let registry = borrow_global<ResourceAccountRegistry>(@admin);
+        let account_info = smart_table::borrow(&registry.accounts, account_name);
+        let resource_signer = account::create_signer_with_capability(&account_info.signer_cap);
+        
+        // 배치로 작업 실행
+        while (!vector::is_empty(&operations)) {
+            let op = vector::pop_back(&mut operations);
+            execute_batch_operation(&resource_signer, op);
+        };
+        
+        vector::destroy_empty(operations);
+    }
+    
+    /// 동적 권한 관리
+    public fun update_account_permissions(
+        admin: &signer,
+        account_name: String,
+        new_permissions: vector<Permission>
+    ) acquires ResourceAccountRegistry {
+        assert!(signer::address_of(admin) == @admin, E_NOT_ADMIN);
+        
+        let registry = borrow_global_mut<ResourceAccountRegistry>(@admin);
+        let account_info = smart_table::borrow_mut(&mut registry.accounts, account_name);
+        
+        account_info.permissions = new_permissions;
+        
+        // 권한 변경 이벤트 발생
+        emit_permission_changed_event(account_info.address, new_permissions);
+    }
+    
+    /// Resource Account 상태 관리
+    public fun set_account_status(
+        admin: &signer,
+        account_name: String,
+        active: bool
+    ) acquires ResourceAccountRegistry {
+        assert!(signer::address_of(admin) == @admin, E_NOT_ADMIN);
+        
+        let registry = borrow_global_mut<ResourceAccountRegistry>(@admin);
+        let account_info = smart_table::borrow_mut(&mut registry.accounts, account_name);
+        
+        account_info.is_active = active;
+    }
+    
+    struct BatchOperation has drop {
+        operation_type: u8,
+        target: address,
+        data: vector<u8>
+    }
+    
+    // 헬퍼 함수들
+    fun generate_account_name(purpose: String, counter: u64): String {
+        let name = string::utf8(b"");
+        string::append(&mut name, purpose);
+        string::append_utf8(&mut name, b"_");
+        string::append_utf8(&mut name, to_string(counter));
+        name
+    }
+    
+    fun has_permission(account_info: &ResourceAccountInfo, addr: address, perm_type: u8): bool {
+        let i = 0;
+        let len = vector::length(&account_info.permissions);
+        
+        while (i < len) {
+            let permission = vector::borrow(&account_info.permissions, i);
+            if (permission.permission_type == perm_type) {
+                // 만료 시간 체크
+                if (option::is_some(&permission.expiry)) {
+                    let expiry = *option::borrow(&permission.expiry);
+                    if (timestamp::now_seconds() > expiry) {
+                        i = i + 1;
+                        continue
+                    }
+                };
+                
+                // 주소 확인
+                if (vector::contains(&permission.allowed_addresses, &addr)) {
+                    return true
+                }
+            };
+            i = i + 1;
+        };
+        
+        false
+    }
+}
+```
+
+## 🎭 Capability 패턴 심화
+
+### Capability 기반 권한 제어
+```move
+module capability_system {
+    use std::signer;
+    use aptos_framework::timestamp;
+    use std::option::{Self, Option};
+    
+    /// 기본 Capability 구조
+    struct Capability<phantom T> has store {
+        // phantom T는 capability의 타입을 나타냄
+    }
+    
+    /// 관리자 권한
+    struct AdminCapability has key, store {}
+    
+    /// 민팅 권한  
+    struct MintCapability<phantom CoinType> has key, store {
+        max_amount: Option<u64>,
+        daily_limit: Option<u64>,
+        last_mint_day: u64,
+        today_minted: u64
+    }
+    
+    /// 소각 권한
+    struct BurnCapability<phantom CoinType> has key, store {}
+    
+    /// 시간 제한 권한
+    struct TimedCapability<T: store> has key, store {
+        capability: T,
+        start_time: u64,
+        end_time: u64,
+        max_uses: Option<u64>,
+        current_uses: u64
+    }
+    
+    /// 다중 서명 권한
+    struct MultiSigCapability<T: store> has key, store {
+        capability: T,
+        required_signatures: u64,
+        authorized_signers: vector<address>,
+        pending_operations: SmartTable<u64, PendingOperation<T>>,
+        operation_counter: u64
+    }
+    
+    struct PendingOperation<T: store> has store {
+        operation_data: T,
+        signatures: vector<address>,
+        created_at: u64,
+        expires_at: u64
+    }
+    
+    /// Capability 발급 시스템
+    public fun issue_mint_capability<CoinType>(
+        admin: &signer,
+        recipient: address,
+        max_amount: Option<u64>,
+        daily_limit: Option<u64>
+    ) {
+        // 관리자 권한 확인
+        assert!(has_admin_capability(signer::address_of(admin)), E_NOT_ADMIN);
+        
+        let mint_cap = MintCapability<CoinType> {
+            max_amount,
+            daily_limit,
+            last_mint_day: get_current_day(),
+            today_minted: 0
+        };
+        
+        move_to<MintCapability<CoinType>>(&create_signer(recipient), mint_cap);
+    }
+    
+    /// 시간 제한 Capability 생성
+    public fun create_timed_capability<T: store>(
+        base_capability: T,
+        duration_seconds: u64,
+        max_uses: Option<u64>
+    ): TimedCapability<T> {
+        let current_time = timestamp::now_seconds();
+        
+        TimedCapability {
+            capability: base_capability,
+            start_time: current_time,
+            end_time: current_time + duration_seconds,
+            max_uses,
+            current_uses: 0
+        }
+    }
+    
+    /// 시간 제한 Capability 사용
+    public fun use_timed_capability<T: store>(
+        timed_cap: &mut TimedCapability<T>
+    ): &T {
+        let current_time = timestamp::now_seconds();
+        
+        // 시간 범위 확인
+        assert!(current_time >= timed_cap.start_time, E_TOO_EARLY);
+        assert!(current_time <= timed_cap.end_time, E_EXPIRED);
+        
+        // 사용 횟수 확인
+        if (option::is_some(&timed_cap.max_uses)) {
+            let max = *option::borrow(&timed_cap.max_uses);
+            assert!(timed_cap.current_uses < max, E_USAGE_EXCEEDED);
+        };
+        
+        timed_cap.current_uses = timed_cap.current_uses + 1;
+        &timed_cap.capability
+    }
+    
+    /// 다중 서명 Capability 생성
+    public fun create_multisig_capability<T: store>(
+        base_capability: T,
+        required_signatures: u64,
+        authorized_signers: vector<address>
+    ): MultiSigCapability<T> {
+        assert!(required_signatures > 0, E_INVALID_THRESHOLD);
+        assert!(required_signatures <= vector::length(&authorized_signers), E_THRESHOLD_TOO_HIGH);
+        
+        MultiSigCapability {
+            capability: base_capability,
+            required_signatures,
+            authorized_signers,
+            pending_operations: smart_table::new(),
+            operation_counter: 0
+        }
+    }
+    
+    /// 다중 서명 작업 제안
+    public fun propose_multisig_operation<T: store + copy>(
+        proposer: &signer,
+        multisig_cap: &mut MultiSigCapability<T>,
+        operation_data: T,
+        expiry_seconds: u64
+    ): u64 {
+        let proposer_addr = signer::address_of(proposer);
+        assert!(vector::contains(&multisig_cap.authorized_signers, &proposer_addr), E_NOT_AUTHORIZED);
+        
+        let operation_id = multisig_cap.operation_counter;
+        multisig_cap.operation_counter = multisig_cap.operation_counter + 1;
+        
+        let current_time = timestamp::now_seconds();
+        let pending_op = PendingOperation {
+            operation_data,
+            signatures: vector::singleton(proposer_addr),  // 제안자는 자동 서명
+            created_at: current_time,
+            expires_at: current_time + expiry_seconds
+        };
+        
+        smart_table::add(&mut multisig_cap.pending_operations, operation_id, pending_op);
+        operation_id
+    }
+    
+    /// 다중 서명 작업에 서명
+    public fun sign_multisig_operation<T: store + copy>(
+        signer: &signer,
+        multisig_cap: &mut MultiSigCapability<T>,
+        operation_id: u64
+    ): bool {
+        let signer_addr = signer::address_of(signer);
+        assert!(vector::contains(&multisig_cap.authorized_signers, &signer_addr), E_NOT_AUTHORIZED);
+        assert!(smart_table::contains(&multisig_cap.pending_operations, operation_id), E_OPERATION_NOT_FOUND);
+        
+        let pending_op = smart_table::borrow_mut(&mut multisig_cap.pending_operations, operation_id);
+        
+        // 만료 확인
+        assert!(timestamp::now_seconds() <= pending_op.expires_at, E_OPERATION_EXPIRED);
+        
+        // 중복 서명 방지
+        assert!(!vector::contains(&pending_op.signatures, &signer_addr), E_ALREADY_SIGNED);
+        
+        // 서명 추가
+        vector::push_back(&mut pending_op.signatures, signer_addr);
+        
+        // 필요한 서명 수 달성 확인
+        vector::length(&pending_op.signatures) >= multisig_cap.required_signatures
+    }
+    
+    /// 다중 서명 작업 실행
+    public fun execute_multisig_operation<T: store + copy>(
+        executor: &signer,
+        multisig_cap: &mut MultiSigCapability<T>,
+        operation_id: u64
+    ): T {
+        assert!(smart_table::contains(&multisig_cap.pending_operations, operation_id), E_OPERATION_NOT_FOUND);
+        
+        let pending_op = smart_table::borrow(&multisig_cap.pending_operations, operation_id);
+        
+        // 충분한 서명 확인
+        assert!(
+            vector::length(&pending_op.signatures) >= multisig_cap.required_signatures,
+            E_INSUFFICIENT_SIGNATURES
+        );
+        
+        // 만료 확인
+        assert!(timestamp::now_seconds() <= pending_op.expires_at, E_OPERATION_EXPIRED);
+        
+        // 작업 데이터 복사 및 정리
+        let operation_data = pending_op.operation_data;
+        smart_table::remove(&mut multisig_cap.pending_operations, operation_id);
+        
+        operation_data
+    }
+    
+    /// Capability 위임 시스템
+    struct DelegatedCapability<T: store> has key, store {
+        original_capability: T,
+        delegate: address,
+        permissions: vector<u8>,  // 위임된 권한 목록
+        start_time: u64,
+        end_time: u64,
+        revocable: bool
+    }
+    
+    /// Capability 위임
+    public fun delegate_capability<T: store>(
+        owner: &signer,
+        capability: T,
+        delegate: address,
+        permissions: vector<u8>,
+        duration_seconds: u64,
+        revocable: bool
+    ) {
+        let current_time = timestamp::now_seconds();
+        let delegated_cap = DelegatedCapability {
+            original_capability: capability,
+            delegate,
+            permissions,
+            start_time: current_time,
+            end_time: current_time + duration_seconds,
+            revocable
+        };
+        
+        move_to(&create_signer(delegate), delegated_cap);
+    }
+    
+    /// 위임된 Capability 사용
+    public fun use_delegated_capability<T: store>(
+        delegate: &signer,
+        permission_type: u8
+    ): &T acquires DelegatedCapability {
+        let delegate_addr = signer::address_of(delegate);
+        assert!(exists<DelegatedCapability<T>>(delegate_addr), E_NO_DELEGATED_CAPABILITY);
+        
+        let delegated_cap = borrow_global<DelegatedCapability<T>>(delegate_addr);
+        
+        // 시간 확인
+        let current_time = timestamp::now_seconds();
+        assert!(current_time >= delegated_cap.start_time, E_TOO_EARLY);
+        assert!(current_time <= delegated_cap.end_time, E_EXPIRED);
+        
+        // 권한 확인
+        assert!(vector::contains(&delegated_cap.permissions, &permission_type), E_PERMISSION_DENIED);
+        
+        &delegated_cap.original_capability
+    }
+    
+    /// Capability 회수
+    public fun revoke_delegated_capability<T: store>(
+        owner: &signer,
+        delegate: address
+    ): T acquires DelegatedCapability {
+        let delegated_cap = move_from<DelegatedCapability<T>>(delegate);
+        assert!(delegated_cap.revocable, E_NOT_REVOCABLE);
+        
+        delegated_cap.original_capability
+    }
+    
+    // 헬퍼 함수들
+    fun get_current_day(): u64 {
+        timestamp::now_seconds() / 86400  // 24 * 60 * 60
+    }
+    
+    fun has_admin_capability(addr: address): bool {
+        exists<AdminCapability>(addr)
+    }
+    
+    fun create_signer(addr: address): signer {
+        // 실제 구현에서는 적절한 signer 생성 로직 필요
+        abort 0  // placeholder
+    }
+}
+```
+
+## 🎪 고급 권한 패턴
+
+### 역할 기반 접근 제어 (RBAC)
+```move
+module rbac_system {
+    use std::signer;
+    use std::vector;
+    use std::string::String;
+    use aptos_std::smart_table::{Self, SmartTable};
+    use aptos_framework::timestamp;
+    
+    /// RBAC 시스템 메인 구조
+    struct RBACSystem has key {
+        roles: SmartTable<String, Role>,
+        user_roles: SmartTable<address, vector<String>>,
+        permissions: SmartTable<String, Permission>,
+        role_permissions: SmartTable<String, vector<String>>,
+        admin: address
+    }
+    
+    struct Role has store, drop, copy {
+        name: String,
+        description: String,
+        is_active: bool,
+        created_at: u64,
+        max_holders: Option<u64>,
+        current_holders: u64
+    }
+    
+    struct Permission has store, drop, copy {
+        name: String,
+        resource: String,      // 리소스 식별자
+        action: String,        // 작업 유형
+        conditions: vector<Condition>
+    }
+    
+    struct Condition has store, drop, copy {
+        condition_type: u8,    // 0: time, 1: amount, 2: frequency
+        operator: u8,          // 0: eq, 1: gt, 2: lt, 3: between
+        values: vector<u64>
+    }
+    
+    /// RBAC 시스템 초기화
+    public fun initialize_rbac(admin: &signer) {
+        let admin_addr = signer::address_of(admin);
+        
+        move_to(admin, RBACSystem {
+            roles: smart_table::new(),
+            user_roles: smart_table::new(),
+            permissions: smart_table::new(),
+            role_permissions: smart_table::new(),
+            admin: admin_addr
+        });
+        
+        // 기본 관리자 역할 생성
+        create_default_admin_role(admin_addr);
+    }
+    
+    /// 역할 생성
+    public fun create_role(
+        admin: &signer,
+        role_name: String,
+        description: String,
+        max_holders: Option<u64>
+    ) acquires RBACSystem {
+        let admin_addr = signer::address_of(admin);
+        let rbac = borrow_global_mut<RBACSystem>(@rbac_admin);
+        
+        assert!(rbac.admin == admin_addr, E_NOT_ADMIN);
+        assert!(!smart_table::contains(&rbac.roles, role_name), E_ROLE_EXISTS);
+        
+        let role = Role {
+            name: role_name,
+            description,
+            is_active: true,
+            created_at: timestamp::now_seconds(),
+            max_holders,
+            current_holders: 0
+        };
+        
+        smart_table::add(&mut rbac.roles, role_name, role);
+        smart_table::add(&mut rbac.role_permissions, role_name, vector::empty());
+    }
+    
+    /// 권한 생성
+    public fun create_permission(
+        admin: &signer,
+        permission_name: String,
+        resource: String,
+        action: String,
+        conditions: vector<Condition>
+    ) acquires RBACSystem {
+        let rbac = borrow_global_mut<RBACSystem>(@rbac_admin);
+        assert!(rbac.admin == signer::address_of(admin), E_NOT_ADMIN);
+        
+        let permission = Permission {
+            name: permission_name,
+            resource,
+            action,
+            conditions
+        };
+        
+        smart_table::add(&mut rbac.permissions, permission_name, permission);
+    }
+    
+    /// 역할에 권한 할당
+    public fun assign_permission_to_role(
+        admin: &signer,
+        role_name: String,
+        permission_name: String
+    ) acquires RBACSystem {
+        let rbac = borrow_global_mut<RBACSystem>(@rbac_admin);
+        assert!(rbac.admin == signer::address_of(admin), E_NOT_ADMIN);
+        
+        // 역할과 권한 존재 확인
+        assert!(smart_table::contains(&rbac.roles, role_name), E_ROLE_NOT_FOUND);
+        assert!(smart_table::contains(&rbac.permissions, permission_name), E_PERMISSION_NOT_FOUND);
+        
+        let role_perms = smart_table::borrow_mut(&mut rbac.role_permissions, role_name);
+        if (!vector::contains(role_perms, &permission_name)) {
+            vector::push_back(role_perms, permission_name);
+        }
+    }
+    
+    /// 사용자에게 역할 할당
+    public fun assign_role_to_user(
+        admin: &signer,
+        user: address,
+        role_name: String
+    ) acquires RBACSystem {
+        let rbac = borrow_global_mut<RBACSystem>(@rbac_admin);
+        assert!(rbac.admin == signer::address_of(admin), E_NOT_ADMIN);
+        
+        // 역할 존재 및 활성 상태 확인
+        assert!(smart_table::contains(&rbac.roles, role_name), E_ROLE_NOT_FOUND);
+        let role = smart_table::borrow_mut(&mut rbac.roles, role_name);
+        assert!(role.is_active, E_ROLE_INACTIVE);
+        
+        // 최대 보유자 수 확인
+        if (option::is_some(&role.max_holders)) {
+            let max = *option::borrow(&role.max_holders);
+            assert!(role.current_holders < max, E_ROLE_FULL);
+        };
+        
+        // 사용자 역할 목록 업데이트
+        if (!smart_table::contains(&rbac.user_roles, user)) {
+            smart_table::add(&mut rbac.user_roles, user, vector::empty());
+        };
+        
+        let user_roles = smart_table::borrow_mut(&mut rbac.user_roles, user);
+        if (!vector::contains(user_roles, &role_name)) {
+            vector::push_back(user_roles, role_name);
+            role.current_holders = role.current_holders + 1;
+        }
+    }
+    
+    /// 권한 확인 (핵심 함수)
+    public fun check_permission(
+        user: address,
+        resource: String,
+        action: String,
+        context: vector<u64>  // 추가 컨텍스트 (시간, 양 등)
+    ): bool acquires RBACSystem {
+        let rbac = borrow_global<RBACSystem>(@rbac_admin);
+        
+        // 사용자 역할 확인
+        if (!smart_table::contains(&rbac.user_roles, user)) {
+            return false
+        };
+        
+        let user_roles = smart_table::borrow(&rbac.user_roles, user);
+        let i = 0;
+        let roles_len = vector::length(user_roles);
+        
+        // 각 역할에 대해 권한 확인
+        while (i < roles_len) {
+            let role_name = vector::borrow(user_roles, i);
+            
+            if (smart_table::contains(&rbac.role_permissions, *role_name)) {
+                let role_perms = smart_table::borrow(&rbac.role_permissions, *role_name);
+                
+                if (check_role_permissions(rbac, role_perms, &resource, &action, &context)) {
+                    return true
+                }
+            };
+            
+            i = i + 1;
+        };
+        
+        false
+    }
+    
+    /// 역할별 권한 확인
+    fun check_role_permissions(
+        rbac: &RBACSystem,
+        role_permissions: &vector<String>,
+        resource: &String,
+        action: &String,
+        context: &vector<u64>
+    ): bool {
+        let i = 0;
+        let perms_len = vector::length(role_permissions);
+        
+        while (i < perms_len) {
+            let perm_name = vector::borrow(role_permissions, i);
+            
+            if (smart_table::contains(&rbac.permissions, *perm_name)) {
+                let permission = smart_table::borrow(&rbac.permissions, *perm_name);
+                
+                // 리소스와 액션 매칭
+                if (permission.resource == *resource && permission.action == *action) {
+                    // 조건 확인
+                    if (check_permission_conditions(&permission.conditions, context)) {
+                        return true
+                    }
+                }
+            };
+            
+            i = i + 1;
+        };
+        
+        false
+    }
+    
+    /// 권한 조건 확인
+    fun check_permission_conditions(
+        conditions: &vector<Condition>,
+        context: &vector<u64>
+    ): bool {
+        let i = 0;
+        let conditions_len = vector::length(conditions);
+        
+        while (i < conditions_len) {
+            let condition = vector::borrow(conditions, i);
+            
+            if (!evaluate_condition(condition, context)) {
+                return false  // 하나라도 실패하면 전체 실패
+            };
+            
+            i = i + 1;
+        };
+        
+        true  // 모든 조건 통과
+    }
+    
+    /// 개별 조건 평가
+    fun evaluate_condition(condition: &Condition, context: &vector<u64>): bool {
+        if (condition.condition_type == 0) {  // 시간 조건
+            let current_time = timestamp::now_seconds();
+            let start_time = *vector::borrow(&condition.values, 0);
+            let end_time = *vector::borrow(&condition.values, 1);
+            
+            current_time >= start_time && current_time <= end_time
+        } else if (condition.condition_type == 1) {  // 양 조건
+            if (vector::is_empty(context)) return false;
+            
+            let amount = *vector::borrow(context, 0);
+            let limit = *vector::borrow(&condition.values, 0);
+            
+            match (condition.operator) {
+                0 => amount == limit,      // equal
+                1 => amount > limit,       // greater than
+                2 => amount < limit,       // less than
+                _ => false
+            }
+        } else {
+            true  // 기타 조건은 통과
+        }
+    }
+    
+    /// 사용자 권한 감사
+    public fun audit_user_permissions(user: address): vector<String> acquires RBACSystem {
+        let rbac = borrow_global<RBACSystem>(@rbac_admin);
+        let all_permissions = vector::empty();
+        
+        if (!smart_table::contains(&rbac.user_roles, user)) {
+            return all_permissions
+        };
+        
+        let user_roles = smart_table::borrow(&rbac.user_roles, user);
+        let i = 0;
+        
+        while (i < vector::length(user_roles)) {
+            let role_name = vector::borrow(user_roles, i);
+            
+            if (smart_table::contains(&rbac.role_permissions, *role_name)) {
+                let role_perms = smart_table::borrow(&rbac.role_permissions, *role_name);
+                
+                // 중복 제거하면서 권한 추가
+                let j = 0;
+                while (j < vector::length(role_perms)) {
+                    let perm = *vector::borrow(role_perms, j);
+                    if (!vector::contains(&all_permissions, &perm)) {
+                        vector::push_back(&mut all_permissions, perm);
+                    };
+                    j = j + 1;
+                }
+            };
+            
+            i = i + 1;
+        };
+        
+        all_permissions
+    }
+    
+    fun create_default_admin_role(admin_addr: address) {
+        // 기본 관리자 역할 생성 로직
+    }
+}
+```
+
+### 동적 권한 관리 시스템
+```move
+module dynamic_permissions {
+    use std::signer;
+    use aptos_framework::timestamp;
+    use aptos_std::smart_table::{Self, SmartTable};
+    
+    /// 동적 권한 관리자
+    struct DynamicPermissionManager has key {
+        permission_rules: SmartTable<String, PermissionRule>,
+        user_contexts: SmartTable<address, UserContext>,
+        rule_counter: u64
+    }
+    
+    struct PermissionRule has store, drop {
+        rule_id: String,
+        conditions: vector<RuleCondition>,
+        actions: vector<RuleAction>,
+        priority: u64,
+        is_active: bool
+    }
+    
+    struct RuleCondition has store, drop {
+        condition_type: u8,  // 0: balance, 1: time, 2: frequency, 3: location
+        operator: u8,
+        threshold: u64,
+        timeframe: Option<u64>
+    }
+    
+    struct RuleAction has store, drop {
+        action_type: u8,  // 0: grant, 1: revoke, 2: limit, 3: notify
+        permission: String,
+        duration: Option<u64>,
+        parameters: vector<u64>
+    }
+    
+    struct UserContext has store, drop {
+        last_activity: u64,
+        activity_count: u64,
+        risk_score: u64,
+        temporary_permissions: SmartTable<String, u64>  // permission -> expiry
+    }
+    
+    /// 동적 규칙 생성
+    public fun create_dynamic_rule(
+        admin: &signer,
+        rule_name: String,
+        conditions: vector<RuleCondition>,
+        actions: vector<RuleAction>,
+        priority: u64
+    ) acquires DynamicPermissionManager {
+        let manager = borrow_global_mut<DynamicPermissionManager>(@permission_admin);
+        
+        let rule = PermissionRule {
+            rule_id: rule_name,
+            conditions,
+            actions,
+            priority,
+            is_active: true
+        };
+        
+        smart_table::add(&mut manager.permission_rules, rule_name, rule);
+    }
+    
+    /// 사용자 컨텍스트 업데이트
+    public fun update_user_context(
+        user: address,
+        activity_type: u8,
+        additional_data: vector<u64>
+    ) acquires DynamicPermissionManager {
+        let manager = borrow_global_mut<DynamicPermissionManager>(@permission_admin);
+        
+        if (!smart_table::contains(&manager.user_contexts, user)) {
+            smart_table::add(&mut manager.user_contexts, user, UserContext {
+                last_activity: 0,
+                activity_count: 0,
+                risk_score: 0,
+                temporary_permissions: smart_table::new()
+            });
+        };
+        
+        let context = smart_table::borrow_mut(&mut manager.user_contexts, user);
+        context.last_activity = timestamp::now_seconds();
+        context.activity_count = context.activity_count + 1;
+        
+        // 위험 점수 계산 (활동 패턴 기반)
+        context.risk_score = calculate_risk_score(context, activity_type, additional_data);
+        
+        // 동적 규칙 평가 및 적용
+        evaluate_and_apply_rules(manager, user, context);
+    }
+    
+    /// 동적 권한 확인
+    public fun check_dynamic_permission(
+        user: address,
+        permission: String,
+        context_data: vector<u64>
+    ): bool acquires DynamicPermissionManager {
+        let manager = borrow_global<DynamicPermissionManager>(@permission_admin);
+        
+        // 기본 권한 확인
+        let has_static_permission = check_static_permission(user, permission);
+        
+        // 사용자 컨텍스트 확인
+        if (!smart_table::contains(&manager.user_contexts, user)) {
+            return has_static_permission
+        };
+        
+        let user_context = smart_table::borrow(&manager.user_contexts, user);
+        
+        // 임시 권한 확인
+        if (smart_table::contains(&user_context.temporary_permissions, permission)) {
+            let expiry = *smart_table::borrow(&user_context.temporary_permissions, permission);
+            if (timestamp::now_seconds() <= expiry) {
+                return true
+            }
+        };
+        
+        // 동적 규칙 기반 권한 확인
+        let dynamic_permission = evaluate_dynamic_rules(manager, user, user_context, permission, context_data);
+        
+        has_static_permission || dynamic_permission
+    }
+    
+    /// 위험 점수 계산
+    fun calculate_risk_score(
+        context: &UserContext,
+        activity_type: u8,
+        additional_data: vector<u64>
+    ): u64 {
+        let base_score = context.risk_score;
+        let current_time = timestamp::now_seconds();
+        
+        // 활동 빈도 기반 점수 조정
+        let time_since_last = current_time - context.last_activity;
+        let frequency_multiplier = if (time_since_last < 60) {  // 1분 미만
+            150  // 1.5배
+        } else if (time_since_last < 3600) {  // 1시간 미만
+            100  // 1.0배
+        } else {
+            50   // 0.5배
+        };
+        
+        // 활동 유형별 위험도
+        let activity_risk = match (activity_type) {
+            0 => 10,  // 일반 조회
+            1 => 30,  // 토큰 전송
+            2 => 50,  // 고액 거래
+            3 => 80,  // 관리자 작업
+            _ => 20   // 기타
+        };
+        
+        let new_score = (base_score + activity_risk) * frequency_multiplier / 100;
+        
+        // 최대값 제한
+        if (new_score > 1000) {
+            1000
+        } else {
+            new_score
+        }
+    }
+    
+    /// 동적 규칙 평가 및 적용
+    fun evaluate_and_apply_rules(
+        manager: &mut DynamicPermissionManager,
+        user: address,
+        user_context: &mut UserContext
+    ) {
+        // 모든 활성 규칙을 우선순위순으로 평가
+        let rule_names = get_sorted_rule_names(manager);
+        let i = 0;
+        
+        while (i < vector::length(&rule_names)) {
+            let rule_name = vector::borrow(&rule_names, i);
+            let rule = smart_table::borrow(&manager.permission_rules, *rule_name);
+            
+            if (rule.is_active && evaluate_rule_conditions(&rule.conditions, user_context)) {
+                apply_rule_actions(&rule.actions, user_context);
+            };
+            
+            i = i + 1;
+        }
+    }
+    
+    fun get_sorted_rule_names(manager: &DynamicPermissionManager): vector<String> {
+        // 규칙을 우선순위순으로 정렬하여 반환
+        vector::empty()  // placeholder
+    }
+    
+    fun evaluate_rule_conditions(conditions: &vector<RuleCondition>, context: &UserContext): bool {
+        // 모든 조건이 만족되는지 확인
+        true  // placeholder
+    }
+    
+    fun apply_rule_actions(actions: &vector<RuleAction>, context: &mut UserContext) {
+        // 규칙의 액션들을 적용
+    }
+    
+    fun check_static_permission(user: address, permission: String): bool {
+        // 정적 권한 확인 (RBAC 등)
+        false  // placeholder
+    }
+    
+    fun evaluate_dynamic_rules(
+        manager: &DynamicPermissionManager,
+        user: address,
+        context: &UserContext,
+        permission: String,
+        context_data: vector<u64>
+    ): bool {
+        // 동적 규칙 평가
+        false  // placeholder
+    }
+}

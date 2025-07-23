@@ -1,3 +1,8 @@
 {
-  "index": "네트워크 인프라"
-} 
+  "index": "개요",
+  "network-overview": "🌐 네트워크 개요 (Mainnet/Testnet/Devnet)",
+  "rpc-indexer": "🔗 RPC & Indexer 엔드포인트",
+  "faucets-explorer": "🚰 Faucets & Explorer 활용",
+  "oracle-integration": "🔮 Oracle 연동 (Pyth)",
+  "full-node-operations": "⚙️ Full Node 운영 (고급)"
+}

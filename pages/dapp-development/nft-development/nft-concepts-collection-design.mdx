@@ -1,0 +1,1596 @@
+# 🎨 NFT 개념 & Collection 설계
+
+Movement Network에서 NFT의 기본 개념부터 확장 가능한 컬렉션 설계까지 완전히 마스터하는 가이드입니다. Move 언어의 리소스 모델을 활용한 안전하고 효율적인 NFT 시스템을 구축합니다.
+
+## 🎯 학습 목표
+
+이 섹션을 완료하면:
+- Movement NFT의 핵심 개념과 아키텍처를 이해할 수 있습니다
+- 확장 가능한 NFT 컬렉션을 설계할 수 있습니다
+- Move 리소스 모델을 활용한 안전한 NFT 구현을 할 수 있습니다
+- 다양한 NFT 사용 사례에 맞는 설계 패턴을 적용할 수 있습니다
+
+## 💎 Movement NFT 기초 개념
+
+### NFT (Non-Fungible Token)란?
+```
+NFT = 대체 불가능한 토큰
+
+🔑 핵심 특징:
+├── 고유성 (Uniqueness): 각 토큰이 고유한 식별자를 가짐
+├── 소유권 (Ownership): 명확한 소유자 정보
+├── 전송 가능성 (Transferability): 소유권 이전 가능
+├── 진위성 (Authenticity): 블록체인으로 검증된 진본성
+└── 희소성 (Scarcity): 제한된 수량 또는 고유한 특성
+```
+
+### Movement NFT vs 다른 체인 NFT
+```typescript
+// Movement NFT의 장점
+const MOVEMENT_NFT_ADVANTAGES = {
+  safety: {
+    resourceModel: "Move 리소스로 자산 보호",
+    compileTimeCheck: "컴파일 타임 안전성 검증",
+    noDoubleSpending: "이중 지출 방지 보장"
+  },
+  
+  performance: {
+    highTPS: "초당 10,000+ 트랜잭션 처리",
+    lowLatency: "밀리초 단위 완결성",
+    lowGasFees: "경제적인 민팅 및 거래 비용"
+  },
+  
+  flexibility: {
+    dynamicNFT: "진화하는 NFT 지원",
+    composability: "다른 프로토콜과 쉬운 조합",
+    upgradeability: "스마트 업그레이드 패턴"
+  }
+};
+```
+
+### Move 리소스 모델과 NFT
+```move
+// Move에서 NFT는 리소스로 표현됩니다
+module nft_basics::simple_nft {
+    use std::string::{Self, String};
+    use std::signer;
+    use aptos_framework::object::{Self, Object};
+    
+    /// NFT를 나타내는 리소스 구조체
+    #[resource_group_member(group = aptos_framework::object::ObjectGroup)]
+    struct SimpleNFT has key {
+        name: String,
+        description: String,
+        image: String,
+        creator: address,
+        owner: address,
+        created_at: u64
+    }
+    
+    /// NFT 민팅 (생성)
+    public fun mint_nft(
+        creator: &signer,
+        name: String,
+        description: String,
+        image: String
+    ): Object<SimpleNFT> {
+        let creator_addr = signer::address_of(creator);
+        
+        // Object 생성 및 NFT 리소스 저장
+        let constructor_ref = object::create_object(creator_addr);
+        let object_signer = object::generate_signer(&constructor_ref);
+        
+        let nft = SimpleNFT {
+            name,
+            description,
+            image,
+            creator: creator_addr,
+            owner: creator_addr,
+            created_at: timestamp::now_seconds()
+        };
+        
+        move_to(&object_signer, nft);
+        object::object_from_constructor_ref<SimpleNFT>(&constructor_ref)
+    }
+    
+    /// NFT 소유권 확인
+    public fun get_owner(nft_object: Object<SimpleNFT>): address acquires SimpleNFT {
+        let nft_addr = object::object_address(&nft_object);
+        let nft = borrow_global<SimpleNFT>(nft_addr);
+        nft.owner
+    }
+    
+    /// NFT 전송
+    public fun transfer(
+        owner: &signer,
+        nft_object: Object<SimpleNFT>,
+        to: address
+    ) acquires SimpleNFT {
+        let owner_addr = signer::address_of(owner);
+        let nft_addr = object::object_address(&nft_object);
+        let nft = borrow_global_mut<SimpleNFT>(nft_addr);
+        
+        // 소유권 확인
+        assert!(nft.owner == owner_addr, E_NOT_OWNER);
+        
+        // 소유권 이전
+        nft.owner = to;
+        
+        // 이벤트 발생 (실제로는 event 모듈 사용)
+        // emit_transfer_event(owner_addr, to, nft_addr);
+    }
+}
+```
+
+## 🏗️ NFT 컬렉션 아키텍처 설계
+
+### 컬렉션 구조 설계
+```move
+module nft_collection::digital_art {
+    use std::string::{Self, String};
+    use std::vector;
+    use std::option::{Self, Option};
+    use aptos_framework::object::{Self, Object, ConstructorRef, DeleteRef};
+    use aptos_framework::timestamp;
+    use aptos_std::smart_table::{Self, SmartTable};
+    
+    /// 컬렉션 메타데이터
+    #[resource_group_member(group = aptos_framework::object::ObjectGroup)]
+    struct Collection has key {
+        name: String,
+        description: String,
+        image: String,
+        creator: address,
+        
+        // 컬렉션 설정
+        max_supply: Option<u64>,
+        current_supply: u64,
+        is_mutable: bool,
+        
+        // 시간 제한
+        mint_start_time: Option<u64>,
+        mint_end_time: Option<u64>,
+        
+        // 가격 정책
+        mint_price: u64,
+        whitelist_price: Option<u64>,
+        
+        // 권한 관리
+        minters: vector<address>,
+        whitelist: SmartTable<address, bool>,
+        
+        // 메타데이터
+        base_uri: String,
+        royalty_percentage: u64,  // basis points (100 = 1%)
+        
+        // 통계
+        total_minted: u64,
+        total_burned: u64
+    }
+    
+    /// 개별 NFT 토큰
+    #[resource_group_member(group = aptos_framework::object::ObjectGroup)]
+    struct Token has key {
+        collection: Object<Collection>,
+        token_id: u64,
+        name: String,
+        description: String,
+        image: String,
+        
+        // 특성 (traits)
+        attributes: SmartTable<String, String>,
+        
+        // 메타데이터
+        rarity_rank: Option<u64>,
+        generation: u64,
+        
+        // 상태
+        is_burned: bool,
+        created_at: u64,
+        last_transfer_at: u64
+    }
+    
+    /// 컬렉션 생성
+    public fun create_collection(
+        creator: &signer,
+        name: String,
+        description: String,
+        image: String,
+        max_supply: Option<u64>,
+        mint_price: u64,
+        royalty_percentage: u64,
+        base_uri: String
+    ): Object<Collection> {
+        let creator_addr = signer::address_of(creator);
+        
+        // 입력 검증
+        assert!(royalty_percentage <= 1000, E_INVALID_ROYALTY); // 최대 10%
+        assert!(string::length(&name) > 0, E_EMPTY_NAME);
+        
+        // Collection Object 생성
+        let constructor_ref = object::create_object(creator_addr);
+        let object_signer = object::generate_signer(&constructor_ref);
+        
+        let collection = Collection {
+            name,
+            description,
+            image,
+            creator: creator_addr,
+            max_supply,
+            current_supply: 0,
+            is_mutable: true,
+            mint_start_time: option::none(),
+            mint_end_time: option::none(),
+            mint_price,
+            whitelist_price: option::none(),
+            minters: vector::singleton(creator_addr),
+            whitelist: smart_table::new(),
+            base_uri,
+            royalty_percentage,
+            total_minted: 0,
+            total_burned: 0
+        };
+        
+        move_to(&object_signer, collection);
+        object::object_from_constructor_ref<Collection>(&constructor_ref)
+    }
+    
+    /// NFT 민팅 (화이트리스트 지원)
+    public fun mint_nft(
+        minter: &signer,
+        collection_obj: Object<Collection>,
+        to: address,
+        name: String,
+        description: String,
+        image: String,
+        attributes: vector<(String, String)>
+    ): Object<Token> acquires Collection {
+        let minter_addr = signer::address_of(minter);
+        let collection_addr = object::object_address(&collection_obj);
+        let collection = borrow_global_mut<Collection>(collection_addr);
+        
+        // 민팅 권한 확인
+        assert!(
+            vector::contains(&collection.minters, &minter_addr) || 
+            collection.creator == minter_addr,
+            E_NOT_AUTHORIZED_MINTER
+        );
+        
+        // 공급량 제한 확인
+        if (option::is_some(&collection.max_supply)) {
+            let max_supply = *option::borrow(&collection.max_supply);
+            assert!(collection.current_supply < max_supply, E_MAX_SUPPLY_REACHED);
+        };
+        
+        // 시간 제한 확인
+        let current_time = timestamp::now_seconds();
+        if (option::is_some(&collection.mint_start_time)) {
+            let start_time = *option::borrow(&collection.mint_start_time);
+            assert!(current_time >= start_time, E_MINT_NOT_STARTED);
+        };
+        
+        if (option::is_some(&collection.mint_end_time)) {
+            let end_time = *option::borrow(&collection.mint_end_time);
+            assert!(current_time <= end_time, E_MINT_ENDED);
+        };
+        
+        // 토큰 ID 생성 (현재 공급량 + 1)
+        let token_id = collection.current_supply + 1;
+        
+        // Token Object 생성
+        let constructor_ref = object::create_object(collection.creator);
+        let object_signer = object::generate_signer(&constructor_ref);
+        
+        // 속성 테이블 생성
+        let attributes_table = smart_table::new();
+        let i = 0;
+        while (i < vector::length(&attributes)) {
+            let (key, value) = *vector::borrow(&attributes, i);
+            smart_table::add(&mut attributes_table, key, value);
+            i = i + 1;
+        };
+        
+        let token = Token {
+            collection: collection_obj,
+            token_id,
+            name,
+            description,
+            image,
+            attributes: attributes_table,
+            rarity_rank: option::none(),
+            generation: 1,
+            is_burned: false,
+            created_at: current_time,
+            last_transfer_at: current_time
+        };
+        
+        move_to(&object_signer, token);
+        
+        // 컬렉션 통계 업데이트
+        collection.current_supply = collection.current_supply + 1;
+        collection.total_minted = collection.total_minted + 1;
+        
+        // 소유권을 'to' 주소로 설정 (Object 소유권)
+        let linear_transfer_ref = object::generate_linear_transfer_ref(&constructor_ref);
+        object::transfer_with_ref(linear_transfer_ref, to);
+        
+        object::object_from_constructor_ref<Token>(&constructor_ref)
+    }
+    
+    /// 배치 민팅 (가스 효율적)
+    public fun batch_mint(
+        minter: &signer,
+        collection_obj: Object<Collection>,
+        recipients: vector<address>,
+        names: vector<String>,
+        descriptions: vector<String>,
+        images: vector<String>,
+        attributes_list: vector<vector<(String, String)>>
+    ): vector<Object<Token>> acquires Collection {
+        let tokens = vector::empty();
+        let i = 0;
+        let count = vector::length(&recipients);
+        
+        // 모든 벡터의 길이가 같은지 확인
+        assert!(
+            vector::length(&names) == count &&
+            vector::length(&descriptions) == count &&
+            vector::length(&images) == count &&
+            vector::length(&attributes_list) == count,
+            E_MISMATCHED_ARRAYS
+        );
+        
+        while (i < count) {
+            let recipient = *vector::borrow(&recipients, i);
+            let name = *vector::borrow(&names, i);
+            let description = *vector::borrow(&descriptions, i);
+            let image = *vector::borrow(&images, i);
+            let attributes = *vector::borrow(&attributes_list, i);
+            
+            let token = mint_nft(
+                minter,
+                collection_obj,
+                recipient,
+                name,
+                description,
+                image,
+                attributes
+            );
+            
+            vector::push_back(&mut tokens, token);
+            i = i + 1;
+        };
+        
+        tokens
+    }
+    
+    /// 화이트리스트 관리
+    public fun add_to_whitelist(
+        creator: &signer,
+        collection_obj: Object<Collection>,
+        addresses: vector<address>
+    ) acquires Collection {
+        let creator_addr = signer::address_of(creator);
+        let collection_addr = object::object_address(&collection_obj);
+        let collection = borrow_global_mut<Collection>(collection_addr);
+        
+        assert!(collection.creator == creator_addr, E_NOT_CREATOR);
+        
+        let i = 0;
+        while (i < vector::length(&addresses)) {
+            let addr = *vector::borrow(&addresses, i);
+            smart_table::upsert(&mut collection.whitelist, addr, true);
+            i = i + 1;
+        }
+    }
+    
+    /// 민팅 시간 설정
+    public fun set_mint_time(
+        creator: &signer,
+        collection_obj: Object<Collection>,
+        start_time: Option<u64>,
+        end_time: Option<u64>
+    ) acquires Collection {
+        let creator_addr = signer::address_of(creator);
+        let collection_addr = object::object_address(&collection_obj);
+        let collection = borrow_global_mut<Collection>(collection_addr);
+        
+        assert!(collection.creator == creator_addr, E_NOT_CREATOR);
+        assert!(collection.is_mutable, E_COLLECTION_IMMUTABLE);
+        
+        collection.mint_start_time = start_time;
+        collection.mint_end_time = end_time;
+    }
+    
+    /// 컬렉션 정보 조회
+    public fun get_collection_info(collection_obj: Object<Collection>): CollectionInfo acquires Collection {
+        let collection_addr = object::object_address(&collection_obj);
+        let collection = borrow_global<Collection>(collection_addr);
+        
+        CollectionInfo {
+            name: collection.name,
+            description: collection.description,
+            creator: collection.creator,
+            max_supply: collection.max_supply,
+            current_supply: collection.current_supply,
+            mint_price: collection.mint_price,
+            royalty_percentage: collection.royalty_percentage,
+            total_minted: collection.total_minted,
+            is_mint_active: is_mint_active(collection)
+        }
+    }
+    
+    /// 토큰 정보 조회
+    public fun get_token_info(token_obj: Object<Token>): TokenInfo acquires Token {
+        let token_addr = object::object_address(&token_obj);
+        let token = borrow_global<Token>(token_addr);
+        
+        TokenInfo {
+            collection: token.collection,
+            token_id: token.token_id,
+            name: token.name,
+            description: token.description,
+            owner: object::owner(token_obj),
+            rarity_rank: token.rarity_rank,
+            generation: token.generation,
+            created_at: token.created_at
+        }
+    }
+    
+    // 구조체 정의
+    struct CollectionInfo has drop {
+        name: String,
+        description: String,
+        creator: address,
+        max_supply: Option<u64>,
+        current_supply: u64,
+        mint_price: u64,
+        royalty_percentage: u64,
+        total_minted: u64,
+        is_mint_active: bool
+    }
+    
+    struct TokenInfo has drop {
+        collection: Object<Collection>,
+        token_id: u64,
+        name: String,
+        description: String,
+        owner: address,
+        rarity_rank: Option<u64>,
+        generation: u64,
+        created_at: u64
+    }
+    
+    // 헬퍼 함수들
+    fun is_mint_active(collection: &Collection): bool {
+        let current_time = timestamp::now_seconds();
+        
+        // 시작 시간 확인
+        if (option::is_some(&collection.mint_start_time)) {
+            let start_time = *option::borrow(&collection.mint_start_time);
+            if (current_time < start_time) return false;
+        };
+        
+        // 종료 시간 확인
+        if (option::is_some(&collection.mint_end_time)) {
+            let end_time = *option::borrow(&collection.mint_end_time);
+            if (current_time > end_time) return false;
+        };
+        
+        // 공급량 확인
+        if (option::is_some(&collection.max_supply)) {
+            let max_supply = *option::borrow(&collection.max_supply);
+            if (collection.current_supply >= max_supply) return false;
+        };
+        
+        true
+    }
+    
+    // 에러 코드
+    const E_NOT_OWNER: u64 = 1;
+    const E_INVALID_ROYALTY: u64 = 2;
+    const E_EMPTY_NAME: u64 = 3;
+    const E_NOT_AUTHORIZED_MINTER: u64 = 4;
+    const E_MAX_SUPPLY_REACHED: u64 = 5;
+    const E_MINT_NOT_STARTED: u64 = 6;
+    const E_MINT_ENDED: u64 = 7;
+    const E_NOT_CREATOR: u64 = 8;
+    const E_COLLECTION_IMMUTABLE: u64 = 9;
+    const E_MISMATCHED_ARRAYS: u64 = 10;
+}
+```
+
+## 🎨 다양한 NFT 설계 패턴
+
+### 1. 제너러티브 NFT 컬렉션
+```move
+module generative_nft::art_collection {
+    use std::vector;
+    use std::string::{Self, String};
+    use aptos_std::smart_table::{Self, SmartTable};
+    use aptos_framework::randomness;
+    
+    /// 제너러티브 특성 정의
+    struct TraitCategory has store, drop {
+        name: String,
+        traits: vector<Trait>,
+        rarity_weights: vector<u64>  // 각 특성의 희귀도 가중치
+    }
+    
+    struct Trait has store, drop, copy {
+        name: String,
+        image: String,
+        rarity: u64  // 10000 = 100%
+    }
+    
+    /// 제너러티브 설정
+    struct GenerativeConfig has key {
+        trait_categories: vector<TraitCategory>,
+        total_combinations: u64,
+        generated_combinations: SmartTable<vector<u8>, bool>,  // 중복 방지
+        rarity_distribution: SmartTable<u64, u64>  // 희귀도별 개수
+    }
+    
+    /// 랜덤 NFT 생성
+    public fun generate_random_nft(
+        collection_obj: Object<Collection>,
+        seed: vector<u8>
+    ): (String, String, vector<(String, String)>) acquires GenerativeConfig {
+        let config = borrow_global_mut<GenerativeConfig>(@generative_nft);
+        
+        let mut attributes = vector::empty();
+        let mut combination_hash = vector::empty();
+        let mut rarity_score = 0;
+        
+        let i = 0;
+        while (i < vector::length(&config.trait_categories)) {
+            let category = vector::borrow(&config.trait_categories, i);
+            
+            // 가중치 기반 랜덤 선택
+            let selected_trait_index = weighted_random_selection(
+                &category.rarity_weights,
+                &seed,
+                i
+            );
+            
+            let selected_trait = vector::borrow(&category.traits, selected_trait_index);
+            
+            vector::push_back(&mut attributes, (category.name, selected_trait.name));
+            vector::append(&mut combination_hash, string::bytes(&selected_trait.name));
+            rarity_score = rarity_score + selected_trait.rarity;
+            
+            i = i + 1;
+        };
+        
+        // 중복 조합 확인
+        assert!(
+            !smart_table::contains(&config.generated_combinations, combination_hash),
+            E_DUPLICATE_COMBINATION
+        );
+        
+        smart_table::add(&mut config.generated_combinations, combination_hash, true);
+        
+        // 희귀도 기반 이름 및 설명 생성
+        let (name, description) = generate_metadata_by_rarity(rarity_score, &attributes);
+        
+        (name, description, attributes)
+    }
+    
+    /// 가중치 기반 랜덤 선택
+    fun weighted_random_selection(
+        weights: &vector<u64>,
+        seed: &vector<u8>,
+        salt: u64
+    ): u64 {
+        let total_weight = vector::fold(weights, 0, |acc, weight| acc + *weight);
+        
+        // 시드와 솔트를 이용한 의사 랜덤 생성
+        let random_seed = hash_with_salt(seed, salt);
+        let random_value = bytes_to_u64(&random_seed) % total_weight;
+        
+        let mut cumulative_weight = 0;
+        let i = 0;
+        while (i < vector::length(weights)) {
+            cumulative_weight = cumulative_weight + *vector::borrow(weights, i);
+            if (random_value < cumulative_weight) {
+                return i
+            };
+            i = i + 1;
+        };
+        
+        vector::length(weights) - 1
+    }
+    
+    fun generate_metadata_by_rarity(
+        rarity_score: u64,
+        attributes: &vector<(String, String)>
+    ): (String, String) {
+        let rarity_tier = if (rarity_score >= 9000) {
+            string::utf8(b"Legendary")
+        } else if (rarity_score >= 7000) {
+            string::utf8(b"Epic")
+        } else if (rarity_score >= 5000) {
+            string::utf8(b"Rare")
+        } else if (rarity_score >= 3000) {
+            string::utf8(b"Uncommon")
+        } else {
+            string::utf8(b"Common")
+        };
+        
+        let name = rarity_tier;
+        string::append_utf8(&mut name, b" Art #");
+        
+        let description = string::utf8(b"A ");
+        string::append(&mut description, rarity_tier);
+        string::append_utf8(&mut description, b" generative art piece with unique traits.");
+        
+        (name, description)
+    }
+    
+    // 헬퍼 함수들
+    fun hash_with_salt(seed: &vector<u8>, salt: u64): vector<u8> {
+        let mut combined = *seed;
+        let salt_bytes = u64_to_bytes(salt);
+        vector::append(&mut combined, salt_bytes);
+        
+        // 실제로는 cryptographic hash 사용
+        combined  // placeholder
+    }
+    
+    fun bytes_to_u64(bytes: &vector<u8>): u64 {
+        // 바이트 배열을 u64로 변환
+        if (vector::is_empty(bytes)) return 0;
+        
+        let mut result = 0;
+        let i = 0;
+        let len = std::math::min(vector::length(bytes), 8);
+        
+        while (i < len) {
+            let byte = *vector::borrow(bytes, i);
+            result = result + ((byte as u64) << (i * 8));
+            i = i + 1;
+        };
+        
+        result
+    }
+    
+    fun u64_to_bytes(value: u64): vector<u8> {
+        let mut bytes = vector::empty();
+        let mut temp = value;
+        
+        while (temp > 0) {
+            vector::push_back(&mut bytes, (temp % 256) as u8);
+            temp = temp / 256;
+        };
+        
+        if (vector::is_empty(&bytes)) {
+            vector::push_back(&mut bytes, 0);
+        };
+        
+        bytes
+    }
+    
+    const E_DUPLICATE_COMBINATION: u64 = 100;
+}
+```
+
+### 2. 진화형 NFT (Dynamic NFT)
+```move
+module dynamic_nft::evolving_character {
+    use std::string::String;
+    use aptos_framework::timestamp;
+    
+    /// 진화 가능한 캐릭터 NFT
+    #[resource_group_member(group = aptos_framework::object::ObjectGroup)]
+    struct EvolvingCharacter has key {
+        // 기본 정보
+        name: String,
+        class: String,  // "Warrior", "Mage", "Archer" 등
+        
+        // 레벨 시스템
+        level: u64,
+        experience: u64,
+        experience_to_next_level: u64,
+        
+        // 스탯
+        strength: u64,
+        intelligence: u64,
+        agility: u64,
+        vitality: u64,
+        
+        // 진화 상태
+        evolution_stage: u64,  // 0: Basic, 1: Advanced, 2: Master, 3: Legendary
+        evolution_requirements: vector<EvolutionRequirement>,
+        
+        // 획득한 아이템과 스킬
+        equipped_items: vector<Object<GameItem>>,
+        learned_skills: vector<String>,
+        
+        // 시간 기반 특성
+        created_at: u64,
+        last_activity: u64,
+        total_play_time: u64,
+        
+        // 성취 및 히스토리
+        achievements: vector<String>,
+        battle_history: vector<BattleRecord>,
+        
+        // 메타데이터 (변경 가능)
+        current_image: String,
+        description: String
+    }
+    
+    struct EvolutionRequirement has store, drop, copy {
+        requirement_type: u8,  // 0: level, 1: item, 2: achievement, 3: time
+        value: u64,
+        description: String,
+        is_met: bool
+    }
+    
+    struct BattleRecord has store, drop, copy {
+        opponent: address,
+        result: u8,  // 0: loss, 1: draw, 2: win
+        experience_gained: u64,
+        timestamp: u64
+    }
+    
+    /// 경험치 추가 및 레벨업 체크
+    public fun gain_experience(
+        owner: &signer,
+        character_obj: Object<EvolvingCharacter>,
+        exp_amount: u64
+    ) acquires EvolvingCharacter {
+        let owner_addr = signer::address_of(owner);
+        assert!(object::owner(character_obj) == owner_addr, E_NOT_OWNER);
+        
+        let character_addr = object::object_address(&character_obj);
+        let character = borrow_global_mut<EvolvingCharacter>(character_addr);
+        
+        character.experience = character.experience + exp_amount;
+        character.last_activity = timestamp::now_seconds();
+        
+        // 레벨업 체크
+        while (character.experience >= character.experience_to_next_level) {
+            level_up(character);
+        };
+        
+        // 진화 조건 체크
+        check_evolution_requirements(character);
+    }
+    
+    /// 레벨업 처리
+    fun level_up(character: &mut EvolvingCharacter) {
+        character.level = character.level + 1;
+        character.experience = character.experience - character.experience_to_next_level;
+        character.experience_to_next_level = calculate_next_level_exp(character.level);
+        
+        // 스탯 증가 (클래스별 차별화)
+        let stat_increases = get_stat_increases_by_class(&character.class);
+        character.strength = character.strength + stat_increases.strength;
+        character.intelligence = character.intelligence + stat_increases.intelligence;
+        character.agility = character.agility + stat_increases.agility;
+        character.vitality = character.vitality + stat_increases.vitality;
+        
+        // 특정 레벨에서 새로운 스킬 습득
+        let new_skills = get_skills_for_level(character.level, &character.class);
+        vector::append(&mut character.learned_skills, new_skills);
+    }
+    
+    /// 진화 조건 확인 및 실행
+    fun check_evolution_requirements(character: &mut EvolvingCharacter) {
+        let mut all_requirements_met = true;
+        let current_time = timestamp::now_seconds();
+        
+        let i = 0;
+        while (i < vector::length(&character.evolution_requirements)) {
+            let requirement = vector::borrow_mut(&mut character.evolution_requirements, i);
+            
+            if (!requirement.is_met) {
+                match (requirement.requirement_type) {
+                    0 => {  // Level requirement
+                        if (character.level >= requirement.value) {
+                            requirement.is_met = true;
+                        }
+                    },
+                    1 => {  // Item requirement
+                        if (has_required_item(character, requirement.value)) {
+                            requirement.is_met = true;
+                        }
+                    },
+                    2 => {  // Achievement requirement
+                        if (has_achievement(character, &requirement.description)) {
+                            requirement.is_met = true;
+                        }
+                    },
+                    3 => {  // Time requirement
+                        let time_since_creation = current_time - character.created_at;
+                        if (time_since_creation >= requirement.value) {
+                            requirement.is_met = true;
+                        }
+                    },
+                    _ => {}
+                }
+            };
+            
+            if (!requirement.is_met) {
+                all_requirements_met = false;
+            };
+            
+            i = i + 1;
+        };
+        
+        // 모든 조건이 충족되면 진화
+        if (all_requirements_met && character.evolution_stage < 3) {
+            evolve_character(character);
+        }
+    }
+    
+    /// 캐릭터 진화 실행
+    fun evolve_character(character: &mut EvolvingCharacter) {
+        character.evolution_stage = character.evolution_stage + 1;
+        
+        // 진화에 따른 스탯 대폭 증가
+        let evolution_bonus = get_evolution_stat_bonus(character.evolution_stage);
+        character.strength = character.strength + evolution_bonus.strength;
+        character.intelligence = character.intelligence + evolution_bonus.intelligence;
+        character.agility = character.agility + evolution_bonus.agility;
+        character.vitality = character.vitality + evolution_bonus.vitality;
+        
+        // 새로운 진화 요구사항 설정
+        character.evolution_requirements = get_next_evolution_requirements(character.evolution_stage);
+        
+        // 이미지 및 설명 업데이트
+        let (new_image, new_description) = get_evolution_metadata(
+            &character.class,
+            character.evolution_stage
+        );
+        character.current_image = new_image;
+        character.description = new_description;
+        
+        // 진화 성취 추가
+        let achievement = get_evolution_achievement_name(character.evolution_stage);
+        vector::push_back(&mut character.achievements, achievement);
+    }
+    
+    /// 전투 참여 및 결과 기록
+    public fun participate_in_battle(
+        owner: &signer,
+        character_obj: Object<EvolvingCharacter>,
+        opponent: address,
+        result: u8,
+        experience_gained: u64
+    ) acquires EvolvingCharacter {
+        let owner_addr = signer::address_of(owner);
+        assert!(object::owner(character_obj) == owner_addr, E_NOT_OWNER);
+        
+        let character_addr = object::object_address(&character_obj);
+        let character = borrow_global_mut<EvolvingCharacter>(character_addr);
+        
+        // 전투 기록 추가
+        let battle_record = BattleRecord {
+            opponent,
+            result,
+            experience_gained,
+            timestamp: timestamp::now_seconds()
+        };
+        vector::push_back(&mut character.battle_history, battle_record);
+        
+        // 경험치 획득
+        gain_experience(owner, character_obj, experience_gained);
+        
+        // 전투 관련 성취 체크
+        check_battle_achievements(character);
+    }
+    
+    // 헬퍼 함수들
+    struct StatIncrease has drop {
+        strength: u64,
+        intelligence: u64,
+        agility: u64,
+        vitality: u64
+    }
+    
+    fun get_stat_increases_by_class(class: &String): StatIncrease {
+        if (class == &string::utf8(b"Warrior")) {
+            StatIncrease { strength: 3, intelligence: 1, agility: 2, vitality: 2 }
+        } else if (class == &string::utf8(b"Mage")) {
+            StatIncrease { strength: 1, intelligence: 3, agility: 1, vitality: 2 }
+        } else if (class == &string::utf8(b"Archer")) {
+            StatIncrease { strength: 2, intelligence: 1, agility: 3, vitality: 2 }
+        } else {
+            StatIncrease { strength: 2, intelligence: 2, agility: 2, vitality: 2 }
+        }
+    }
+    
+    fun calculate_next_level_exp(level: u64): u64 {
+        // 레벨업에 필요한 경험치 계산 (지수적 증가)
+        100 + (level * level * 50)
+    }
+    
+    fun get_skills_for_level(level: u64, class: &String): vector<String> {
+        let skills = vector::empty();
+        
+        // 특정 레벨에서만 스킬 습득
+        if (level % 5 == 0) {  // 5레벨마다
+            if (class == &string::utf8(b"Warrior")) {
+                if (level == 5) vector::push_back(&mut skills, string::utf8(b"Power Strike"));
+                if (level == 10) vector::push_back(&mut skills, string::utf8(b"Shield Bash"));
+                if (level == 15) vector::push_back(&mut skills, string::utf8(b"Berserker Rage"));
+            } else if (class == &string::utf8(b"Mage")) {
+                if (level == 5) vector::push_back(&mut skills, string::utf8(b"Fireball"));
+                if (level == 10) vector::push_back(&mut skills, string::utf8(b"Ice Shard"));
+                if (level == 15) vector::push_back(&mut skills, string::utf8(b"Lightning Bolt"));
+            }
+            // ... 다른 클래스들
+        };
+        
+        skills
+    }
+    
+    fun has_required_item(character: &EvolvingCharacter, item_id: u64): bool {
+        // 장착된 아이템 중에서 특정 아이템 확인
+        // 실제로는 GameItem의 ID 체크 로직 필요
+        !vector::is_empty(&character.equipped_items)  // placeholder
+    }
+    
+    fun has_achievement(character: &EvolvingCharacter, achievement: &String): bool {
+        vector::contains(&character.achievements, achievement)
+    }
+    
+    fun get_evolution_stat_bonus(evolution_stage: u64): StatIncrease {
+        match (evolution_stage) {
+            1 => StatIncrease { strength: 10, intelligence: 10, agility: 10, vitality: 10 },
+            2 => StatIncrease { strength: 25, intelligence: 25, agility: 25, vitality: 25 },
+            3 => StatIncrease { strength: 50, intelligence: 50, agility: 50, vitality: 50 },
+            _ => StatIncrease { strength: 0, intelligence: 0, agility: 0, vitality: 0 }
+        }
+    }
+    
+    fun get_next_evolution_requirements(stage: u64): vector<EvolutionRequirement> {
+        let requirements = vector::empty();
+        
+        match (stage) {
+            1 => {  // Advanced to Master
+                vector::push_back(&mut requirements, EvolutionRequirement {
+                    requirement_type: 0,
+                    value: 25,
+                    description: string::utf8(b"Reach level 25"),
+                    is_met: false
+                });
+                vector::push_back(&mut requirements, EvolutionRequirement {
+                    requirement_type: 2,
+                    value: 0,
+                    description: string::utf8(b"Win 10 battles"),
+                    is_met: false
+                });
+            },
+            2 => {  // Master to Legendary
+                vector::push_back(&mut requirements, EvolutionRequirement {
+                    requirement_type: 0,
+                    value: 50,
+                    description: string::utf8(b"Reach level 50"),
+                    is_met: false
+                });
+                vector::push_back(&mut requirements, EvolutionRequirement {
+                    requirement_type: 3,
+                    value: 2592000, // 30 days
+                    description: string::utf8(b"30 days since creation"),
+                    is_met: false
+                });
+            },
+            _ => {}
+        };
+        
+        requirements
+    }
+    
+    fun get_evolution_metadata(class: &String, stage: u64): (String, String) {
+        let stage_name = if (stage == 1) {
+            string::utf8(b"Advanced")
+        } else if (stage == 2) {
+            string::utf8(b"Master")
+        } else if (stage == 3) {
+            string::utf8(b"Legendary")
+        } else {
+            string::utf8(b"Basic")
+        };
+        
+        let image = string::utf8(b"https://nft.example.com/images/");
+        string::append(&mut image, *class);
+        string::append_utf8(&mut image, b"_");
+        string::append(&mut image, stage_name);
+        string::append_utf8(&mut image, b".png");
+        
+        let description = string::utf8(b"A ");
+        string::append(&mut description, stage_name);
+        string::append_utf8(&mut description, b" ");
+        string::append(&mut description, *class);
+        string::append_utf8(&mut description, b" that has evolved through battles and experience.");
+        
+        (image, description)
+    }
+    
+    fun get_evolution_achievement_name(stage: u64): String {
+        match (stage) {
+            1 => string::utf8(b"First Evolution"),
+            2 => string::utf8(b"Master Warrior"),
+            3 => string::utf8(b"Legendary Hero"),
+            _ => string::utf8(b"Basic Achievement")
+        }
+    }
+    
+    fun check_battle_achievements(character: &mut EvolvingCharacter) {
+        let wins = count_battle_wins(&character.battle_history);
+        
+        if (wins >= 10 && !has_achievement(character, &string::utf8(b"Win 10 battles"))) {
+            vector::push_back(&mut character.achievements, string::utf8(b"Win 10 battles"));
+        };
+        
+        if (wins >= 50 && !has_achievement(character, &string::utf8(b"Battle Veteran"))) {
+            vector::push_back(&mut character.achievements, string::utf8(b"Battle Veteran"));
+        };
+        
+        if (wins >= 100 && !has_achievement(character, &string::utf8(b"War Champion"))) {
+            vector::push_back(&mut character.achievements, string::utf8(b"War Champion"));
+        };
+    }
+    
+    fun count_battle_wins(battle_history: &vector<BattleRecord>): u64 {
+        let mut wins = 0;
+        let i = 0;
+        
+        while (i < vector::length(battle_history)) {
+            let record = vector::borrow(battle_history, i);
+            if (record.result == 2) {  // win = 2
+                wins = wins + 1;
+            };
+            i = i + 1;
+        };
+        
+        wins
+    }
+    
+    const E_NOT_OWNER: u64 = 1;
+}
+```
+
+### 3. 유틸리티 NFT (Membership & Access)
+```move
+module utility_nft::membership_pass {
+    use std::string::{Self, String};
+    use std::vector;
+    use aptos_framework::timestamp;
+    use aptos_std::smart_table::{Self, SmartTable};
+    
+    /// 멤버십 패스 NFT
+    #[resource_group_member(group = aptos_framework::object::ObjectGroup)]
+    struct MembershipPass has key {
+        // 멤버십 정보
+        tier: String,  // "Bronze", "Silver", "Gold", "Platinum"
+        tier_level: u8,  // 1, 2, 3, 4
+        
+        // 유효 기간
+        issued_at: u64,
+        expires_at: Option<u64>,  // None이면 평생 멤버십
+        last_used: u64,
+        
+        // 혜택 및 권한
+        benefits: SmartTable<String, BenefitInfo>,
+        access_level: u64,  // 접근 권한 레벨
+        
+        // 사용 통계
+        total_usage_count: u64,
+        monthly_usage_count: u64,
+        last_reset_month: u64,
+        
+        // 포인트 시스템
+        loyalty_points: u64,
+        lifetime_points: u64,
+        
+        // 특별 권한
+        special_privileges: vector<String>,
+        referral_code: String,
+        referred_by: Option<address>
+    }
+    
+    struct BenefitInfo has store, drop, copy {
+        benefit_type: String,
+        usage_limit: Option<u64>,
+        current_usage: u64,
+        discount_percentage: u64,  // basis points
+        description: String
+    }
+    
+    /// 멤버십 패스 발급
+    public fun mint_membership_pass(
+        issuer: &signer,
+        to: address,
+        tier: String,
+        expires_at: Option<u64>
+    ): Object<MembershipPass> {
+        let issuer_addr = signer::address_of(issuer);
+        
+        // 티어 레벨 결정
+        let tier_level = get_tier_level(&tier);
+        assert!(tier_level > 0, E_INVALID_TIER);
+        
+        // Object 생성
+        let constructor_ref = object::create_object(issuer_addr);
+        let object_signer = object::generate_signer(&constructor_ref);
+        
+        let current_time = timestamp::now_seconds();
+        let referral_code = generate_referral_code(to, current_time);
+        
+        let membership = MembershipPass {
+            tier,
+            tier_level,
+            issued_at: current_time,
+            expires_at,
+            last_used: 0,
+            benefits: create_tier_benefits(tier_level),
+            access_level: tier_level * 25, // 25, 50, 75, 100
+            total_usage_count: 0,
+            monthly_usage_count: 0,
+            last_reset_month: get_current_month(),
+            loyalty_points: 0,
+            lifetime_points: 0,
+            special_privileges: get_tier_privileges(tier_level),
+            referral_code,
+            referred_by: option::none()
+        };
+        
+        move_to(&object_signer, membership);
+        
+        // 소유권을 'to' 주소로 설정
+        let linear_transfer_ref = object::generate_linear_transfer_ref(&constructor_ref);
+        object::transfer_with_ref(linear_transfer_ref, to);
+        
+        object::object_from_constructor_ref<MembershipPass>(&constructor_ref)
+    }
+    
+    /// 멤버십 혜택 사용
+    public fun use_benefit(
+        user: &signer,
+        membership_obj: Object<MembershipPass>,
+        benefit_type: String,
+        usage_amount: u64
+    ): (bool, u64) acquires MembershipPass {
+        let user_addr = signer::address_of(user);
+        assert!(object::owner(membership_obj) == user_addr, E_NOT_OWNER);
+        
+        let membership_addr = object::object_address(&membership_obj);
+        let membership = borrow_global_mut<MembershipPass>(membership_addr);
+        
+        // 만료 확인
+        assert!(is_membership_valid(membership), E_MEMBERSHIP_EXPIRED);
+        
+        // 월별 사용량 리셋 체크
+        let current_month = get_current_month();
+        if (current_month != membership.last_reset_month) {
+            membership.monthly_usage_count = 0;
+            membership.last_reset_month = current_month;
+        };
+        
+        // 혜택 존재 확인
+        assert!(
+            smart_table::contains(&membership.benefits, benefit_type),
+            E_BENEFIT_NOT_AVAILABLE
+        );
+        
+        let benefit = smart_table::borrow_mut(&mut membership.benefits, benefit_type);
+        
+        // 사용 한도 확인
+        if (option::is_some(&benefit.usage_limit)) {
+            let limit = *option::borrow(&benefit.usage_limit);
+            assert!(benefit.current_usage + usage_amount <= limit, E_USAGE_LIMIT_EXCEEDED);
+        };
+        
+        // 혜택 사용 처리
+        benefit.current_usage = benefit.current_usage + usage_amount;
+        membership.total_usage_count = membership.total_usage_count + usage_amount;
+        membership.monthly_usage_count = membership.monthly_usage_count + usage_amount;
+        membership.last_used = timestamp::now_seconds();
+        
+        // 로열티 포인트 적립
+        let points_earned = calculate_loyalty_points(membership.tier_level, usage_amount);
+        membership.loyalty_points = membership.loyalty_points + points_earned;
+        membership.lifetime_points = membership.lifetime_points + points_earned;
+        
+        (true, benefit.discount_percentage)
+    }
+    
+    /// 멤버십 업그레이드
+    public fun upgrade_membership(
+        upgrader: &signer,
+        membership_obj: Object<MembershipPass>,
+        new_tier: String
+    ) acquires MembershipPass {
+        let upgrader_addr = signer::address_of(upgrader);
+        assert!(object::owner(membership_obj) == upgrader_addr, E_NOT_OWNER);
+        
+        let membership_addr = object::object_address(&membership_obj);
+        let membership = borrow_global_mut<MembershipPass>(membership_addr);
+        
+        let new_tier_level = get_tier_level(&new_tier);
+        assert!(new_tier_level > membership.tier_level, E_INVALID_UPGRADE);
+        
+        // 업그레이드 자격 확인 (포인트 기반)
+        let required_points = get_upgrade_required_points(new_tier_level);
+        assert!(membership.loyalty_points >= required_points, E_INSUFFICIENT_POINTS);
+        
+        // 포인트 차감
+        membership.loyalty_points = membership.loyalty_points - required_points;
+        
+        // 티어 업그레이드
+        membership.tier = new_tier;
+        membership.tier_level = new_tier_level;
+        membership.access_level = new_tier_level * 25;
+        
+        // 새로운 혜택으로 업데이트
+        membership.benefits = create_tier_benefits(new_tier_level);
+        membership.special_privileges = get_tier_privileges(new_tier_level);
+    }
+    
+    /// 추천 시스템
+    public fun refer_new_member(
+        referrer: &signer,
+        membership_obj: Object<MembershipPass>,
+        new_member: address
+    ): String acquires MembershipPass {
+        let referrer_addr = signer::address_of(referrer);
+        assert!(object::owner(membership_obj) == referrer_addr, E_NOT_OWNER);
+        
+        let membership_addr = object::object_address(&membership_obj);
+        let membership = borrow_global_mut<MembershipPass>(membership_addr);
+        
+        // 추천 보상 지급
+        let referral_bonus = get_referral_bonus(membership.tier_level);
+        membership.loyalty_points = membership.loyalty_points + referral_bonus;
+        
+        membership.referral_code
+    }
+    
+    /// 멤버십 상태 조회
+    public fun get_membership_status(
+        membership_obj: Object<MembershipPass>
+    ): MembershipStatus acquires MembershipPass {
+        let membership_addr = object::object_address(&membership_obj);
+        let membership = borrow_global<MembershipPass>(membership_addr);
+        
+        MembershipStatus {
+            tier: membership.tier,
+            tier_level: membership.tier_level,
+            is_valid: is_membership_valid(membership),
+            expires_at: membership.expires_at,
+            access_level: membership.access_level,
+            loyalty_points: membership.loyalty_points,
+            lifetime_points: membership.lifetime_points,
+            total_usage: membership.total_usage_count,
+            monthly_usage: membership.monthly_usage_count,
+            available_benefits: get_available_benefits(&membership.benefits),
+            special_privileges: membership.special_privileges
+        }
+    }
+    
+    struct MembershipStatus has drop {
+        tier: String,
+        tier_level: u8,
+        is_valid: bool,
+        expires_at: Option<u64>,
+        access_level: u64,
+        loyalty_points: u64,
+        lifetime_points: u64,
+        total_usage: u64,
+        monthly_usage: u64,
+        available_benefits: vector<String>,
+        special_privileges: vector<String>
+    }
+    
+    // 헬퍼 함수들
+    fun get_tier_level(tier: &String): u8 {
+        if (tier == &string::utf8(b"Bronze")) 1
+        else if (tier == &string::utf8(b"Silver")) 2
+        else if (tier == &string::utf8(b"Gold")) 3
+        else if (tier == &string::utf8(b"Platinum")) 4
+        else 0
+    }
+    
+    fun create_tier_benefits(tier_level: u8): SmartTable<String, BenefitInfo> {
+        let benefits = smart_table::new();
+        
+        match (tier_level) {
+            1 => {  // Bronze
+                smart_table::add(&mut benefits, string::utf8(b"discount"), BenefitInfo {
+                    benefit_type: string::utf8(b"discount"),
+                    usage_limit: option::some(5),
+                    current_usage: 0,
+                    discount_percentage: 500, // 5%
+                    description: string::utf8(b"5% discount on purchases")
+                });
+            },
+            2 => {  // Silver
+                smart_table::add(&mut benefits, string::utf8(b"discount"), BenefitInfo {
+                    benefit_type: string::utf8(b"discount"),
+                    usage_limit: option::some(10),
+                    current_usage: 0,
+                    discount_percentage: 1000, // 10%
+                    description: string::utf8(b"10% discount on purchases")
+                });
+                smart_table::add(&mut benefits, string::utf8(b"early_access"), BenefitInfo {
+                    benefit_type: string::utf8(b"early_access"),
+                    usage_limit: option::none(),
+                    current_usage: 0,
+                    discount_percentage: 0,
+                    description: string::utf8(b"Early access to new features")
+                });
+            },
+            3 => {  // Gold
+                smart_table::add(&mut benefits, string::utf8(b"discount"), BenefitInfo {
+                    benefit_type: string::utf8(b"discount"),
+                    usage_limit: option::some(20),
+                    current_usage: 0,
+                    discount_percentage: 1500, // 15%
+                    description: string::utf8(b"15% discount on purchases")
+                });
+                smart_table::add(&mut benefits, string::utf8(b"priority_support"), BenefitInfo {
+                    benefit_type: string::utf8(b"priority_support"),
+                    usage_limit: option::none(),
+                    current_usage: 0,
+                    discount_percentage: 0,
+                    description: string::utf8(b"Priority customer support")
+                });
+            },
+            4 => {  // Platinum
+                smart_table::add(&mut benefits, string::utf8(b"discount"), BenefitInfo {
+                    benefit_type: string::utf8(b"discount"),
+                    usage_limit: option::none(),
+                    current_usage: 0,
+                    discount_percentage: 2000, // 20%
+                    description: string::utf8(b"20% discount on all purchases")
+                });
+                smart_table::add(&mut benefits, string::utf8(b"exclusive_access"), BenefitInfo {
+                    benefit_type: string::utf8(b"exclusive_access"),
+                    usage_limit: option::none(),
+                    current_usage: 0,
+                    discount_percentage: 0,
+                    description: string::utf8(b"Exclusive access to premium features")
+                });
+            },
+            _ => {}
+        };
+        
+        benefits
+    }
+    
+    fun get_tier_privileges(tier_level: u8): vector<String> {
+        let privileges = vector::empty();
+        
+        match (tier_level) {
+            1 => {
+                vector::push_back(&mut privileges, string::utf8(b"basic_features"));
+            },
+            2 => {
+                vector::push_back(&mut privileges, string::utf8(b"basic_features"));
+                vector::push_back(&mut privileges, string::utf8(b"early_access"));
+            },
+            3 => {
+                vector::push_back(&mut privileges, string::utf8(b"basic_features"));
+                vector::push_back(&mut privileges, string::utf8(b"early_access"));
+                vector::push_back(&mut privileges, string::utf8(b"priority_support"));
+                vector::push_back(&mut privileges, string::utf8(b"api_access"));
+            },
+            4 => {
+                vector::push_back(&mut privileges, string::utf8(b"basic_features"));
+                vector::push_back(&mut privileges, string::utf8(b"early_access"));
+                vector::push_back(&mut privileges, string::utf8(b"priority_support"));
+                vector::push_back(&mut privileges, string::utf8(b"api_access"));
+                vector::push_back(&mut privileges, string::utf8(b"exclusive_events"));
+                vector::push_back(&mut privileges, string::utf8(b"white_glove_service"));
+            },
+            _ => {}
+        };
+        
+        privileges
+    }
+    
+    fun is_membership_valid(membership: &MembershipPass): bool {
+        if (option::is_some(&membership.expires_at)) {
+            let expires_at = *option::borrow(&membership.expires_at);
+            timestamp::now_seconds() <= expires_at
+        } else {
+            true  // 평생 멤버십
+        }
+    }
+    
+    fun get_current_month(): u64 {
+        // 현재 월을 계산 (1970년 1월부터 경과한 월 수)
+        timestamp::now_seconds() / (30 * 24 * 3600)  // 대략적인 월 계산
+    }
+    
+    fun calculate_loyalty_points(tier_level: u8, usage_amount: u64): u64 {
+        let multiplier = match (tier_level) {
+            1 => 1,
+            2 => 2,
+            3 => 3,
+            4 => 5,
+            _ => 1
+        };
+        
+        usage_amount * multiplier
+    }
+    
+    fun get_upgrade_required_points(tier_level: u8): u64 {
+        match (tier_level) {
+            2 => 1000,   // Bronze to Silver
+            3 => 5000,   // Silver to Gold
+            4 => 15000,  // Gold to Platinum
+            _ => 0
+        }
+    }
+    
+    fun get_referral_bonus(tier_level: u8): u64 {
+        match (tier_level) {
+            1 => 100,
+            2 => 250,
+            3 => 500,
+            4 => 1000,
+            _ => 50
+        }
+    }
+    
+    fun generate_referral_code(user: address, timestamp: u64): String {
+        // 사용자 주소와 타임스탬프를 조합해 고유 코드 생성
+        let addr_bytes = bcs::to_bytes(&user);
+        let time_bytes = bcs::to_bytes(&timestamp);
+        
+        // 간단한 해싱 (실제로는 더 복잡한 로직 필요)
+        let hash = vector::length(&addr_bytes) + vector::length(&time_bytes) + timestamp;
+        
+        let code = string::utf8(b"REF");
+        let hash_str = u64_to_string(hash % 1000000); // 6자리 숫자
+        string::append(&mut code, hash_str);
+        
+        code
+    }
+    
+    fun get_available_benefits(benefits: &SmartTable<String, BenefitInfo>): vector<String> {
+        let available = vector::empty();
+        
+        smart_table::for_each_ref(benefits, |benefit_type, benefit_info| {
+            if (option::is_none(&benefit_info.usage_limit) || 
+                benefit_info.current_usage < *option::borrow(&benefit_info.usage_limit)) {
+                vector::push_back(&mut available, *benefit_type);
+            }
+        });
+        
+        available
+    }
+    
+    fun u64_to_string(value: u64): String {
+        if (value == 0) {
+            return string::utf8(b"0")
+        };
+        
+        let digits = vector::empty();
+        let mut temp = value;
+        
+        while (temp > 0) {
+            let digit = (temp % 10) as u8;
+            vector::push_back(&mut digits, digit + 48); // ASCII '0' = 48
+            temp = temp / 10;
+        };
+        
+        vector::reverse(&mut digits);
+        string::utf8(digits)
+    }
+    
+    // 에러 코드
+    const E_INVALID_TIER: u64 = 1;
+    const E_NOT_OWNER: u64 = 2;
+    const E_MEMBERSHIP_EXPIRED: u64 = 3;
+    const E_BENEFIT_NOT_AVAILABLE: u64 = 4;
+    const E_USAGE_LIMIT_EXCEEDED: u64 = 5;
+    const E_INVALID_UPGRADE: u64 = 6;
+    const E_INSUFFICIENT_POINTS: u64 = 7;
+}
+```
+
+## 🎯 NFT 설계 베스트 프랙티스
+
+### 확장 가능한 설계 원칙
+```move
+// ✅ 좋은 예: 확장 가능한 구조
+module scalable_nft::base {
+    use aptos_std::smart_table::{Self, SmartTable};
+    
+    struct BaseNFT has key {
+        // 핵심 데이터
+        core_data: CoreData,
+        
+        // 확장 가능한 메타데이터
+        extended_attributes: SmartTable<String, AttributeValue>,
+        
+        // 버전 관리
+        schema_version: u64,
+        
+        // 업그레이드 지원
+        upgrade_capability: Option<UpgradeCapability>
+    }
+    
+    struct AttributeValue has store, drop, copy {
+        value_type: u8,  // 0: string, 1: number, 2: boolean, 3: vector
+        string_value: Option<String>,
+        number_value: Option<u64>,
+        boolean_value: Option<bool>,
+        vector_value: Option<vector<u8>>
+    }
+}
+
+// ❌ 나쁜 예: 고정된 구조
+module fixed_nft::example {
+    struct FixedNFT has key {
+        name: String,
+        description: String,
+        // 새로운 속성 추가가 어려움
+        // 업그레이드 불가능
+    }
+}
+```
+
+### 가스 효율적인 패턴
+```move
+// ✅ 가스 최적화 패턴
+public fun batch_mint_optimized(
+    creator: &signer,
+    collection_obj: Object<Collection>,
+    mint_data: vector<MintData>
+) {
+    // 사전 검증을 한 번에 수행
+    validate_batch_mint_preconditions(&mint_data, collection_obj);
+    
+    // 배치 처리로 반복 작업 최소화
+    let i = 0;
+    let len = vector::length(&mint_data);
+    
+    while (i < len) {
+        let data = vector::borrow(&mint_data, i);
+        mint_single_optimized(creator, collection_obj, data);
+        i = i + 1;
+    };
+    
+    // 이벤트를 마지막에 한 번에 발생
+    emit_batch_mint_event(len);
+}
+
+// ❌ 가스 비효율적인 패턴
+public fun individual_mint_calls(
+    creator: &signer,
+    collection_obj: Object<Collection>,
+    mint_data: vector<MintData>
+) {
+    let i = 0;
+    while (i < vector::length(&mint_data)) {
+        let data = vector::borrow(&mint_data, i);
+        // 매번 개별 검증과 이벤트 발생 - 가스 낭비
+        mint_nft_individual(creator, collection_obj, data);
+        i = i + 1;
+    }
+}
+```
+
+## 🔗 다음 단계
+
+NFT 개념과 컬렉션 설계를 마스터했다면:
+
+**[Token Standard & Metadata →](/dapp-development/nft-development/token-standard-metadata)**
+
+## 📚 참고 자료
+
+- [Movement 개발자 포털](https://developer.movementnetwork.xyz/)
+- [Movement NFT 표준](https://docs.movementnetwork.xyz/nft-standard)
+- [Object 모델 가이드](https://docs.movementnetwork.xyz/objects)
+- [NFT 베스트 프랙티스](https://docs.movementnetwork.xyz/nft-best-practices)
+
+---
+
+*Movement Network에서 혁신적이고 확장 가능한 NFT 시스템을 구축하세요! 🎨⚡*

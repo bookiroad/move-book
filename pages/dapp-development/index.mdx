@@ -1,21 +1,491 @@
-# DApp Development
+# 🏗️ dApp 개발 (dApp Development)
 
-Building decentralized applications with Move.
+Movement Network에서 실제 운영 가능한 탈중앙화 애플리케이션을 구축하는 종합 가이드입니다. NFT부터 DeFi, 게임까지 다양한 dApp 카테고리별 심화 개발 과정을 다룹니다.
 
-## Overview
+## 🎯 학습 목표
 
-This section guides you through the process of building complete decentralized applications (DApps) using Move smart contracts.
+이 섹션을 완료하면:
+- Movement Network의 주요 dApp 카테고리를 완전히 이해할 수 있습니다
+- NFT 마켓플레이스와 컬렉션을 구축할 수 있습니다
+- DeFi 프로토콜과 DEX를 개발할 수 있습니다
+- 온체인 게임과 게임 이코노미를 설계할 수 있습니다
 
-## Development Topics
+## 🌟 Movement dApp 생태계
 
-- DApp Architecture
-- Frontend Integration
-- Smart Contract Design
-- User Interface Development
-- Wallet Integration
-- Testing Strategies
-- Deployment and Maintenance
+### dApp 개발의 특별함
+```
+Movement Network dApp 개발의 강점:
 
-## Building Your First DApp
+🚀 Move 언어의 안전성
+├── 리소스 지향 프로그래밍
+├── 컴파일 타임 검증
+├── 메모리 안전성 보장
+└── 자산 보호 메커니즘
 
-Follow along as we build a complete DApp from smart contract to user interface. 
+⚡ 고성능 인프라
+├── 높은 TPS (10,000+)
+├── 낮은 지연시간 (< 100ms)
+├── 저렴한 가스비
+└── 즉시 완결성
+
+🔗 EVM 호환성
+├── Ethereum 도구 체인 지원
+├── 기존 DeFi 프로토콜 포팅
+├── 크로스체인 상호운용성
+└── 개발자 친화적 환경
+```
+
+### 주요 dApp 카테고리
+```
+🎨 NFT & Creator Economy
+├── 디지털 아트 컬렉션
+├── 게임 아이템과 캐릭터
+├── 메타버스 자산
+├── 유틸리티 NFT
+└── 음악 & 엔터테인먼트
+
+💰 DeFi & Financial Services  
+├── 탈중앙화 거래소 (DEX)
+├── 대출 및 차용 플랫폼
+├── 유동성 마이닝
+├── 수익률 농사 (Yield Farming)
+└── 보험 프로토콜
+
+🎮 Gaming & Metaverse
+├── 온체인 게임 로직
+├── NFT 기반 게임 아이템
+├── 플레이-투-언 메커니즘
+├── 가상 세계 및 토지
+└── 게이밍 토큰 이코노미
+
+🏛️ Governance & DAO
+├── 탈중앙화 자율 조직
+├── 투표 및 제안 시스템
+├── 재무 관리
+└── 커뮤니티 거버넌스
+```
+
+## 📊 개발 복잡도 및 학습 경로
+
+### 난이도별 분류
+```
+🟢 초급 (Beginner)
+├── 기본 NFT 컬렉션
+├── 간단한 토큰 전송
+├── 기본 게임 아이템
+└── 투표 시스템
+
+🟡 중급 (Intermediate)
+├── NFT 마켓플레이스
+├── 기본 DeFi 프로토콜
+├── 토큰 스왑 서비스
+└── 멀티플레이어 게임
+
+🔴 고급 (Advanced)
+├── 복합 DeFi 프로토콜
+├── 크로스체인 브리지
+├── 온체인 MMO 게임
+└── 고도화된 DAO 시스템
+```
+
+### 권장 학습 순서
+```
+📚 Movement dApp 개발 로드맵:
+
+1️⃣ 기초 준비 (1-2주)
+   ├── Move 언어 마스터
+   ├── Movement SDK 숙지
+   └── 개발 환경 구축
+
+2️⃣ NFT 개발 (2-3주)
+   ├── NFT 표준 이해
+   ├── 컬렉션 설계
+   ├── 메타데이터 관리
+   └── 마켓플레이스 구축
+
+3️⃣ DeFi 개발 (3-4주)
+   ├── Fungible Asset 프레임워크
+   ├── 스왑 메커니즘
+   ├── 유동성 관리
+   └── 복합 프로토콜
+
+4️⃣ 게임 개발 (4-5주)
+   ├── 온체인 게임 아키텍처
+   ├── NFT 아이템 시스템
+   ├── 게임 이코노미
+   └── 완전한 RPG 게임
+
+5️⃣ 고급 패턴 (2-3주)
+   ├── 크로스체인 연동
+   ├── 확장성 최적화
+   ├── 보안 강화
+   └── 프로덕션 배포
+```
+
+## 🛠️ dApp 개발 스택
+
+### 핵심 기술 스택
+```typescript
+// Movement dApp 개발 필수 도구
+const MOVEMENT_DEV_STACK = {
+  // 백엔드 (스마트 계약)
+  language: "Move",
+  framework: "Movement Framework",
+  tools: ["Movement CLI", "Move Prover", "Move Analyzer"],
+  
+  // 프론트엔드
+  client: ["TypeScript SDK", "React", "Next.js"],
+  wallet: ["Razor Wallet", "Nightly", "Movement Wallet"],
+  
+  // 인프라
+  rpc: ["Movement RPC", "Alchemy", "QuickNode"],
+  indexing: ["Movement Indexer", "GraphQL"],
+  storage: ["IPFS", "Arweave", "Movement Storage"],
+  
+  // 테스팅
+  testing: ["Movement Test Framework", "Jest", "Cypress"]
+};
+```
+
+### 개발 환경 설정
+```bash
+# Movement 개발 환경 구축
+curl -fsSL https://install.movementnetwork.xyz | sh
+source ~/.bashrc
+
+# 프로젝트 초기화
+movement init my-dapp
+cd my-dapp
+
+# 의존성 설치
+npm install @movementnetwork/sdk
+npm install @movementnetwork/wallet-adapter
+
+# 개발 서버 시작
+movement dev
+```
+
+## 📖 세부 학습 가이드
+
+### 1. [NFT 개발](/dapp-development/nft-development)
+디지털 자산과 컬렉션 구축의 모든 것:
+- **[NFT 개념 & Collection 설계](/dapp-development/nft-development/nft-concepts-collection-design)**
+  - Movement NFT 표준 이해
+  - 컬렉션 아키텍처 설계
+  - 메타데이터 스키마 구조
+  - 확장 가능한 NFT 시스템
+
+- **[Token Standard & Metadata](/dapp-development/nft-development/token-standard-metadata)**
+  - Movement Token Standard 심화
+  - JSON 메타데이터 최적화
+  - 온체인 vs 오프체인 저장
+  - IPFS 통합 및 관리
+
+- **[Resource Account 활용](/dapp-development/nft-development/resource-account-integration)**
+  - NFT 민팅을 위한 Resource Account
+  - 자동화된 컬렉션 관리
+  - 배치 민팅 시스템
+  - 권한 관리 패턴
+
+- **[Royalty & Property Map](/dapp-development/nft-development/royalty-property-map)**
+  - 로열티 시스템 구현
+  - 동적 속성 관리
+  - 진화하는 NFT 설계
+  - 게임 아이템 특성 시스템
+
+- **[완전한 NFT 프로젝트 예제](/dapp-development/nft-development/complete-nft-marketplace)**
+  - 종합 NFT 마켓플레이스
+  - 경매 및 고정가 판매
+  - 컬렉션 탐색 및 필터링
+  - 실시간 알림 시스템
+
+### 2. [DeFi 개발](/dapp-development/defi-development) ✨
+탈중앙화 금융 생태계 구축 - **완전한 가이드 제공**
+
+#### 🪙 **[토큰 프레임워크](/dapp-development/defi-development/fungible-asset-framework)**
+Movement Network의 Fungible Asset 표준을 완전히 마스터합니다.
+- ✅ **고급 토큰 시스템**: 리베이스, 디플레이션, 인플레이션 제어
+- ✅ **스테이킹 메커니즘**: 다중 티어 스테이킹 및 보상 시스템
+- ✅ **베스팅 시스템**: 클리프, 선형/단계적 베스팅 구현
+- ✅ **거버넌스 토큰**: 투표권 및 위임 시스템
+- ✅ **전송 제한**: KYC, 화이트리스트, 일일 한도 제어
+- ✅ **TypeScript SDK**: 완전한 프론트엔드 통합
+
+#### 🏦 **[대출/차용 시스템](/dapp-development/defi-development/lending-borrowing-system)**
+담보 기반 대출 프로토콜을 구축합니다.
+- ✅ **담보 관리**: 다중 자산 담보 및 LTV 제어
+- ✅ **동적 이자율**: 적응형 이자율 모델 구현
+- ✅ **청산 시스템**: 자동 청산 및 인센티브 메커니즘
+- ✅ **리스크 관리**: 헬스 팩터 및 스트레스 테스트
+- ✅ **플래시 론**: 무담보 순간 대출 시스템
+- ✅ **가격 오라클**: 실시간 가격 피드 통합
+
+#### 🔄 **[DEX & AMM 구현](/dapp-development/defi-development/dex-amm-implementation)**
+탈중앙화 거래소와 자동화된 마켓 메이커를 구축합니다.
+- ✅ **멀티 AMM**: Constant Product, Stable Swap, Concentrated Liquidity
+- ✅ **집중 유동성**: Uniswap V3 스타일 고급 유동성 관리
+- ✅ **MEV 보호**: 샌드위치 공격 방지 및 배치 처리
+- ✅ **스마트 라우팅**: 최적 경로 탐색 알고리즘
+- ✅ **플래시 스왑**: 차익거래 및 고급 거래 전략
+- ✅ **수수료 분배**: DAO 기반 수익 분배 시스템
+
+#### 🏛️ **[거버넌스 시스템](/dapp-development/defi-development/governance-dao-system)**
+완전한 DAO 거버넌스 시스템을 구축합니다.
+- ✅ **제안 시스템**: 파라미터 변경, 업그레이드, 지출 제안
+- ✅ **위임 투표**: 대리인 시스템 및 투표력 위임
+- ✅ **쿼드라틱 투표**: 고급 투표 메커니즘
+- ✅ **타임락**: 실행 지연 및 보안 강화
+- ✅ **멀티시그**: 다중 서명 보안 시스템
+- ✅ **위원회**: 전문 분야별 의사결정 위원회
+
+#### 🌟 **[통합 DeFi 프로토콜](/dapp-development/defi-development/complete-defi-protocol)**
+모든 기능을 통합한 완전한 DeFi 생태계를 구축합니다.
+- ✅ **원클릭 DeFi**: 토큰 생성부터 DAO까지 한 번에
+- ✅ **자동화 시스템**: 포트폴리오 리밸런싱 및 수익률 최적화
+- ✅ **개인화 대시보드**: 사용자별 맞춤 분석 및 추천
+- ✅ **실시간 모니터링**: 위험 감지 및 알림 시스템
+- ✅ **긴급 대응**: 자동 출금 및 보호 메커니즘
+- ✅ **크로스체인**: 다중 체인 자산 관리
+
+### 3. [게임 개발](/dapp-development/game-development)
+온체인 게임의 새로운 패러다임:
+- **[Move Slayers - 온체인 RPG 완전 가이드](/dapp-development/game-development/move-slayers-rpg-guide)**
+  - 완전한 온체인 RPG 구현
+  - 캐릭터 시스템 및 스탯 관리
+  - 아이템 제작 및 강화
+  - PvP 전투 시스템
+  - 길드 및 퀘스트 시스템
+
+## 🎯 dApp 개발 베스트 프랙티스
+
+### 아키텍처 설계 원칙
+```move
+// ✅ 좋은 예: 모듈화된 구조
+module my_dapp::core {
+    // 핵심 비즈니스 로직
+}
+
+module my_dapp::storage {
+    // 데이터 저장 및 관리
+}
+
+module my_dapp::events {
+    // 이벤트 처리 시스템
+}
+
+module my_dapp::admin {
+    // 관리자 기능
+}
+
+// ❌ 나쁜 예: 모든 기능이 하나의 모듈에
+module my_dapp::everything {
+    // 모든 기능이 섞여있음
+}
+```
+
+### 보안 고려사항
+```move
+// ✅ 보안 체크리스트
+public fun secure_function(user: &signer, amount: u64) {
+    // 1. 입력 검증
+    assert!(amount > 0, E_INVALID_AMOUNT);
+    assert!(amount <= MAX_AMOUNT, E_AMOUNT_TOO_LARGE);
+    
+    // 2. 권한 확인
+    let user_addr = signer::address_of(user);
+    assert!(is_authorized(user_addr), E_NOT_AUTHORIZED);
+    
+    // 3. 상태 검증
+    assert!(is_system_active(), E_SYSTEM_PAUSED);
+    
+    // 4. 재진입 방지
+    assert!(!is_locked(), E_REENTRANT_CALL);
+    set_lock(true);
+    
+    // 5. 비즈니스 로직 실행
+    execute_business_logic(user, amount);
+    
+    // 6. 락 해제
+    set_lock(false);
+}
+```
+
+### 가스 최적화 패턴
+```move
+// ✅ 가스 효율적인 패턴
+public fun batch_operation(items: vector<Item>) {
+    let results = vector::empty();
+    let i = 0;
+    let len = vector::length(&items);
+    
+    // 배치 처리로 가스 절약
+    while (i < len) {
+        let item = vector::borrow(&items, i);
+        let result = process_item(item);
+        vector::push_back(&mut results, result);
+        i = i + 1;
+    };
+    
+    // 한 번에 저장
+    store_batch_results(results);
+}
+
+// ❌ 가스 비효율적인 패턴
+public fun individual_operations(items: vector<Item>) {
+    let i = 0;
+    while (i < vector::length(&items)) {
+        let item = vector::borrow(&items, i);
+        let result = process_item(item);
+        store_single_result(result); // 매번 저장 - 가스 낭비
+        i = i + 1;
+    }
+}
+```
+
+## 📊 dApp 성능 메트릭
+
+### 주요 성능 지표
+```typescript
+interface DAppMetrics {
+  // 트랜잭션 메트릭
+  transactionThroughput: number;  // TPS
+  averageLatency: number;         // ms
+  gasEfficiency: number;          // gas/operation
+  
+  // 사용자 경험 메트릭
+  walletConnectionTime: number;   // ms
+  transactionConfirmTime: number; // ms
+  errorRate: number;              // %
+  
+  // 비즈니스 메트릭
+  dailyActiveUsers: number;
+  transactionVolume: number;      // MOVE
+  uniqueInteractions: number;
+}
+```
+
+### 모니터링 및 분석
+```typescript
+// dApp 성능 모니터링 시스템
+class DAppMonitor {
+  async trackTransaction(txHash: string) {
+    const startTime = Date.now();
+    
+    try {
+      const result = await client.waitForTransaction(txHash);
+      const endTime = Date.now();
+      
+      this.recordMetric('transaction_success', {
+        latency: endTime - startTime,
+        gasUsed: result.gas_used,
+        blockHeight: result.version
+      });
+    } catch (error) {
+      this.recordMetric('transaction_error', {
+        error: error.message,
+        txHash
+      });
+    }
+  }
+  
+  private recordMetric(event: string, data: any) {
+    // 메트릭 저장 및 분석
+    console.log(`[${event}]`, data);
+  }
+}
+```
+
+## 🚀 배포 및 운영 가이드
+
+### 배포 체크리스트
+```bash
+# 1. 테스트 완료 확인
+movement move test --coverage
+movement move prove
+
+# 2. 보안 감사
+movement move audit --strict
+
+# 3. 가스 최적화 검증
+movement move benchmark
+
+# 4. 테스트넷 배포
+movement move publish --network testnet
+
+# 5. 통합 테스트
+npm run test:integration
+
+# 6. 메인넷 배포 (신중히!)
+movement move publish --network mainnet
+```
+
+### 운영 모니터링
+```typescript
+// 실시간 dApp 상태 모니터링
+const MONITORING_CONFIG = {
+  healthCheck: {
+    interval: 30000, // 30초마다
+    endpoints: [
+      '/api/health',
+      '/api/contract-status',
+      '/api/user-metrics'
+    ]
+  },
+  
+  alerts: {
+    errorRate: { threshold: 5, period: '5m' },
+    latency: { threshold: 1000, period: '1m' },
+    gasPrice: { threshold: 100, period: '10m' }
+  },
+  
+  backup: {
+    frequency: 'daily',
+    retention: 30, // 30일
+    destinations: ['s3', 'ipfs']
+  }
+};
+```
+
+## 🎓 실습 프로젝트 아이디어
+
+### 초급자용 프로젝트
+- 🎨 **개인 NFT 갤러리**: 나만의 디지털 아트 컬렉션
+- 💰 **심플 토큰 스왑**: 기본적인 토큰 교환 서비스
+- 🎮 **온체인 가위바위보**: 간단한 게임 로직 구현
+
+### 중급자용 프로젝트
+- 🏪 **NFT 마켓플레이스**: 경매 및 즉시 구매 기능
+- 🏦 **P2P 대출 플랫폼**: 개인 간 암호화폐 대출
+- ⚔️ **턴제 전략 게임**: 복잡한 게임 상태 관리
+
+### 고급자용 프로젝트
+- 🌉 **크로스체인 브리지**: 다중 체인 자산 이동
+- 🏛️ **DAO 거버넌스 플랫폼**: 완전한 탈중앙화 조직
+- 🌍 **메타버스 플랫폼**: 가상 세계 및 경제 시스템
+
+## 🔗 다음 단계
+
+dApp 개발 여정을 시작할 준비가 되셨나요?
+
+**[NFT 개발 시작하기 →](/dapp-development/nft-development)**
+
+## 📚 추가 학습 자료
+
+### 공식 문서
+- [Movement 개발자 포털](https://developer.movementnetwork.xyz/)
+- [Movement dApp 가이드](https://docs.movementnetwork.xyz/dapps)
+- [Move 언어 레퍼런스](https://docs.movementnetwork.xyz/move)
+
+### 커뮤니티 리소스
+- **Discord**: 실시간 개발자 지원
+- **GitHub**: 오픈소스 dApp 예제
+- **Forum**: 심화 기술 토론
+
+### 실전 예제
+- [Movement dApp Examples](https://github.com/movementlabsxyz/dapp-examples)
+- [NFT Collection Templates](https://github.com/movementlabsxyz/nft-templates)
+- [DeFi Protocol Examples](https://github.com/movementlabsxyz/defi-examples)
+
+---
+
+*Movement Network에서 혁신적인 dApp을 구축하여 Web3의 미래를 선도하세요! 🏗️🚀*

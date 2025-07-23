@@ -1,0 +1,1746 @@
+# 🏪 완전한 NFT 프로젝트 예제
+
+Movement Network에서 프로덕션 수준의 NFT 마켓플레이스를 구축하는 완전한 가이드입니다. 경매 시스템부터 사용자 포트폴리오까지, 실제 운영 가능한 NFT 생태계를 만들어봅니다.
+
+## 🎯 학습 목표
+
+이 섹션을 완료하면:
+- 완전한 NFT 마켓플레이스 아키텍처를 구현할 수 있습니다
+- 경매 및 즉시 구매 시스템을 구축할 수 있습니다
+- 고급 검색 및 필터링 기능을 개발할 수 있습니다
+- 사용자 프로필 및 포트폴리오를 만들 수 있습니다
+- 실시간 알림 및 활동 피드를 구현할 수 있습니다
+
+## 🏗️ Movement NFT 마켓플레이스 아키텍처
+
+### 종합 마켓플레이스 컨트랙트
+```move
+module nft_marketplace::comprehensive_marketplace {
+    use std::signer;
+    use std::string::{Self, String};
+    use std::vector;
+    use std::option::{Self, Option};
+    use aptos_framework::coin::{Self, Coin};
+    use aptos_framework::aptos_coin::AptosCoin;
+    use aptos_framework::timestamp;
+    use aptos_framework::event::{Self, EventHandle};
+    use aptos_std::smart_table::{Self, SmartTable};
+    use aptos_std::simple_map::{Self, SimpleMap};
+    use aptos_token_objects::token::{Self, Token};
+    use aptos_token_objects::collection::{Self, Collection};
+    
+    /// 종합 NFT 마켓플레이스
+    struct NFTMarketplace has key {
+        // 마켓플레이스 정보
+        name: String,
+        description: String,
+        owner: address,
+        
+        // 거래 관리
+        listings: SmartTable<address, Listing>,        // token_address -> listing
+        auctions: SmartTable<address, Auction>,        // token_address -> auction
+        offers: SmartTable<address, vector<Offer>>,    // token_address -> offers
+        
+        // 사용자 관리
+        user_profiles: SmartTable<address, UserProfile>,
+        user_collections: SmartTable<address, vector<address>>, // user -> owned tokens
+        user_favorites: SmartTable<address, vector<address>>,   // user -> favorited tokens
+        
+        // 컬렉션 관리
+        verified_collections: SmartTable<address, CollectionInfo>,
+        collection_stats: SmartTable<address, CollectionStats>,
+        
+        // 거래 이력
+        trade_history: vector<TradeRecord>,
+        
+        // 마켓플레이스 설정
+        platform_fee: u64,  // basis points (100 = 1%)
+        min_listing_price: u64,
+        max_auction_duration: u64,
+        
+        // 통계
+        total_volume: u64,
+        total_sales: u64,
+        active_listings: u64,
+        active_auctions: u64,
+        
+        // 이벤트
+        marketplace_events: EventHandle<MarketplaceEvent>,
+        
+        // 고급 기능
+        featured_items: vector<address>,
+        trending_collections: vector<address>,
+        daily_deals: SmartTable<u64, vector<address>>, // day -> token addresses
+        
+        // 필터링 인덱스
+        price_index: SmartTable<u64, vector<address>>,     // price_range -> tokens
+        rarity_index: SmartTable<String, vector<address>>, // rarity -> tokens
+        category_index: SmartTable<String, vector<address>> // category -> tokens
+    }
+    
+    /// 판매 리스팅
+    struct Listing has store, drop, copy {
+        token_address: address,
+        seller: address,
+        price: u64,
+        currency: String, // "MOVE" or other tokens
+        
+        // 판매 설정
+        listing_type: u8, // 0: fixed_price, 1: declining_price, 2: bundle
+        start_time: u64,
+        end_time: Option<u64>,
+        
+        // 가격 설정 (declining price용)
+        starting_price: Option<u64>,
+        reserve_price: Option<u64>,
+        price_decline_rate: Option<u64>,
+        
+        // 번들 설정
+        bundle_items: Option<vector<address>>,
+        bundle_discount: Option<u64>,
+        
+        // 상태
+        is_active: bool,
+        view_count: u64,
+        favorite_count: u64,
+        
+        created_at: u64,
+        updated_at: u64
+    }
+    
+    /// 경매
+    struct Auction has store, drop, copy {
+        token_address: address,
+        seller: address,
+        
+        // 경매 설정
+        starting_bid: u64,
+        reserve_price: Option<u64>,
+        current_bid: u64,
+        current_bidder: Option<address>,
+        
+        // 시간 설정
+        start_time: u64,
+        end_time: u64,
+        extension_period: u64, // 마지막 순간 입찰 시 연장 시간
+        
+        // 입찰 이력
+        bid_history: vector<Bid>,
+        
+        // 경매 타입
+        auction_type: u8, // 0: english, 1: dutch, 2: sealed_bid
+        
+        // 상태
+        is_active: bool,
+        is_finalized: bool,
+        
+        created_at: u64
+    }
+    
+    struct Bid has store, drop, copy {
+        bidder: address,
+        amount: u64,
+        timestamp: u64,
+        is_automatic: bool // 자동 입찰 여부
+    }
+    
+    /// 제안 (Offer)
+    struct Offer has store, drop, copy {
+        token_address: address,
+        offerer: address,
+        amount: u64,
+        currency: String,
+        
+        // 제안 설정
+        expires_at: u64,
+        is_collection_offer: bool, // 컬렉션 전체에 대한 제안
+        
+        // 조건
+        conditions: Option<OfferConditions>,
+        
+        is_active: bool,
+        created_at: u64
+    }
+    
+    struct OfferConditions has store, drop, copy {
+        min_rarity: Option<String>,
+        max_rarity: Option<String>,
+        required_attributes: Option<SimpleMap<String, String>>,
+        excluded_tokens: Option<vector<address>>
+    }
+    
+    /// 사용자 프로필
+    struct UserProfile has store, drop, copy {
+        user_address: address,
+        username: String,
+        display_name: String,
+        bio: String,
+        avatar_uri: String,
+        banner_uri: String,
+        
+        // 소셜 링크
+        social_links: SimpleMap<String, String>,
+        
+        // 통계
+        tokens_owned: u64,
+        tokens_created: u64,
+        total_sales: u64,
+        total_purchases: u64,
+        total_volume: u64,
+        
+        // 설정
+        email_notifications: bool,
+        privacy_level: u8, // 0: public, 1: limited, 2: private
+        
+        // 인증
+        is_verified: bool,
+        verification_badges: vector<String>,
+        
+        created_at: u64,
+        last_active: u64
+    }
+    
+    /// 컬렉션 정보
+    struct CollectionInfo has store, drop, copy {
+        collection_address: address,
+        name: String,
+        description: String,
+        creator: address,
+        
+        // 메타데이터
+        image_uri: String,
+        banner_uri: String,
+        external_url: Option<String>,
+        
+        // 통계
+        total_supply: u64,
+        owners_count: u64,
+        floor_price: Option<u64>,
+        total_volume: u64,
+        
+        // 설정
+        is_verified: bool,
+        is_featured: bool,
+        category: String,
+        tags: vector<String>,
+        
+        created_at: u64
+    }
+    
+    struct CollectionStats has store, drop, copy {
+        collection_address: address,
+        
+        // 가격 통계
+        floor_price: Option<u64>,
+        ceiling_price: Option<u64>,
+        average_price: Option<u64>,
+        
+        // 거래 통계 (24시간)
+        daily_volume: u64,
+        daily_sales: u64,
+        daily_average_price: Option<u64>,
+        
+        // 거래 통계 (7일)
+        weekly_volume: u64,
+        weekly_sales: u64,
+        
+        // 소유자 통계
+        unique_owners: u64,
+        owner_distribution: SimpleMap<u64, u64>, // token_count -> owner_count
+        
+        last_updated: u64
+    }
+    
+    /// 거래 기록
+    struct TradeRecord has store, drop, copy {
+        trade_id: u64,
+        token_address: address,
+        trade_type: String, // "sale", "auction", "offer_accepted"
+        
+        // 거래 당사자
+        seller: address,
+        buyer: address,
+        
+        // 가격 정보
+        price: u64,
+        currency: String,
+        platform_fee_paid: u64,
+        royalty_paid: u64,
+        
+        // 메타데이터
+        marketplace_name: String,
+        block_height: u64,
+        timestamp: u64
+    }
+    
+    /// 마켓플레이스 이벤트
+    struct MarketplaceEvent has drop, store {
+        event_type: String,
+        token_address: address,
+        user_address: address,
+        amount: Option<u64>,
+        additional_data: String,
+        timestamp: u64
+    }
+    
+    /// 마켓플레이스 초기화
+    public fun initialize_marketplace(
+        owner: &signer,
+        name: String,
+        description: String,
+        platform_fee: u64
+    ) {
+        let owner_addr = signer::address_of(owner);
+        
+        // 플랫폼 수수료 검증 (최대 10%)
+        assert!(platform_fee <= 1000, E_INVALID_PLATFORM_FEE);
+        
+        let marketplace = NFTMarketplace {
+            name,
+            description,
+            owner: owner_addr,
+            listings: smart_table::new(),
+            auctions: smart_table::new(),
+            offers: smart_table::new(),
+            user_profiles: smart_table::new(),
+            user_collections: smart_table::new(),
+            user_favorites: smart_table::new(),
+            verified_collections: smart_table::new(),
+            collection_stats: smart_table::new(),
+            trade_history: vector::empty(),
+            platform_fee,
+            min_listing_price: 1000, // 0.001 MOVE
+            max_auction_duration: 604800, // 7 days
+            total_volume: 0,
+            total_sales: 0,
+            active_listings: 0,
+            active_auctions: 0,
+            marketplace_events: account::new_event_handle<MarketplaceEvent>(owner),
+            featured_items: vector::empty(),
+            trending_collections: vector::empty(),
+            daily_deals: smart_table::new(),
+            price_index: smart_table::new(),
+            rarity_index: smart_table::new(),
+            category_index: smart_table::new()
+        };
+        
+        move_to(owner, marketplace);
+    }
+    
+    /// NFT 판매 등록
+    public fun list_token_for_sale(
+        seller: &signer,
+        marketplace_addr: address,
+        token_address: address,
+        price: u64,
+        listing_type: u8,
+        duration: Option<u64>
+    ) acquires NFTMarketplace {
+        let seller_addr = signer::address_of(seller);
+        let marketplace = borrow_global_mut<NFTMarketplace>(marketplace_addr);
+        
+        // 토큰 소유권 확인
+        assert!(is_token_owner(token_address, seller_addr), E_NOT_TOKEN_OWNER);
+        
+        // 가격 검증
+        assert!(price >= marketplace.min_listing_price, E_PRICE_TOO_LOW);
+        
+        // 기존 리스팅 확인
+        assert!(!smart_table::contains(&marketplace.listings, token_address), E_ALREADY_LISTED);
+        
+        let current_time = timestamp::now_seconds();
+        let end_time = if (option::is_some(&duration)) {
+            option::some(current_time + *option::borrow(&duration))
+        } else {
+            option::none()
+        };
+        
+        let listing = Listing {
+            token_address,
+            seller: seller_addr,
+            price,
+            currency: string::utf8(b"MOVE"),
+            listing_type,
+            start_time: current_time,
+            end_time,
+            starting_price: option::none(),
+            reserve_price: option::none(),
+            price_decline_rate: option::none(),
+            bundle_items: option::none(),
+            bundle_discount: option::none(),
+            is_active: true,
+            view_count: 0,
+            favorite_count: 0,
+            created_at: current_time,
+            updated_at: current_time
+        };
+        
+        smart_table::add(&mut marketplace.listings, token_address, listing);
+        marketplace.active_listings = marketplace.active_listings + 1;
+        
+        // 가격 인덱스 업데이트
+        update_price_index(marketplace, token_address, price);
+        
+        // 이벤트 발생
+        event::emit_event(&mut marketplace.marketplace_events, MarketplaceEvent {
+            event_type: string::utf8(b"token_listed"),
+            token_address,
+            user_address: seller_addr,
+            amount: option::some(price),
+            additional_data: string::utf8(b""),
+            timestamp: current_time
+        });
+    }
+    
+    /// NFT 즉시 구매
+    public fun buy_token(
+        buyer: &signer,
+        marketplace_addr: address,
+        token_address: address,
+        payment: Coin<AptosCoin>
+    ) acquires NFTMarketplace {
+        let buyer_addr = signer::address_of(buyer);
+        let marketplace = borrow_global_mut<NFTMarketplace>(marketplace_addr);
+        
+        // 리스팅 확인
+        assert!(smart_table::contains(&marketplace.listings, token_address), E_NOT_LISTED);
+        let listing = smart_table::borrow_mut(&mut marketplace.listings, token_address);
+        
+        assert!(listing.is_active, E_LISTING_NOT_ACTIVE);
+        
+        // 만료 시간 확인
+        if (option::is_some(&listing.end_time)) {
+            let end_time = *option::borrow(&listing.end_time);
+            assert!(timestamp::now_seconds() <= end_time, E_LISTING_EXPIRED);
+        };
+        
+        // 결제 금액 확인
+        let payment_amount = coin::value(&payment);
+        assert!(payment_amount >= listing.price, E_INSUFFICIENT_PAYMENT);
+        
+        // 수수료 계산
+        let platform_fee_amount = (listing.price * marketplace.platform_fee) / 10000;
+        let royalty_amount = calculate_royalty_amount(token_address, listing.price);
+        let seller_amount = listing.price - platform_fee_amount - royalty_amount;
+        
+        // 결제 분배
+        let platform_fee_payment = coin::extract(&mut payment, platform_fee_amount);
+        let royalty_payment = coin::extract(&mut payment, royalty_amount);
+        let seller_payment = coin::extract(&mut payment, seller_amount);
+        
+        // 플랫폼 수수료 지급
+        coin::deposit(marketplace.owner, platform_fee_payment);
+        
+        // 로열티 지급
+        distribute_royalty(token_address, royalty_payment);
+        
+        // 판매자에게 지급
+        coin::deposit(listing.seller, seller_payment);
+        
+        // 잔액 반환
+        if (coin::value(&payment) > 0) {
+            coin::deposit(buyer_addr, payment);
+        } else {
+            coin::destroy_zero(payment);
+        };
+        
+        // NFT 소유권 이전
+        transfer_token_ownership(token_address, listing.seller, buyer_addr);
+        
+        // 거래 기록 저장
+        let trade_record = TradeRecord {
+            trade_id: marketplace.total_sales + 1,
+            token_address,
+            trade_type: string::utf8(b"sale"),
+            seller: listing.seller,
+            buyer: buyer_addr,
+            price: listing.price,
+            currency: listing.currency,
+            platform_fee_paid: platform_fee_amount,
+            royalty_paid: royalty_amount,
+            marketplace_name: marketplace.name,
+            block_height: get_current_block_height(),
+            timestamp: timestamp::now_seconds()
+        };
+        
+        vector::push_back(&mut marketplace.trade_history, trade_record);
+        
+        // 통계 업데이트
+        marketplace.total_volume = marketplace.total_volume + listing.price;
+        marketplace.total_sales = marketplace.total_sales + 1;
+        marketplace.active_listings = marketplace.active_listings - 1;
+        
+        // 사용자 프로필 업데이트
+        update_user_stats_after_purchase(marketplace, buyer_addr, listing.price);
+        update_user_stats_after_sale(marketplace, listing.seller, listing.price);
+        
+        // 리스팅 제거
+        smart_table::remove(&mut marketplace.listings, token_address);
+        
+        // 컬렉션 통계 업데이트
+        update_collection_stats_after_sale(marketplace, token_address, listing.price);
+        
+        // 이벤트 발생
+        event::emit_event(&mut marketplace.marketplace_events, MarketplaceEvent {
+            event_type: string::utf8(b"token_sold"),
+            token_address,
+            user_address: buyer_addr,
+            amount: option::some(listing.price),
+            additional_data: string::utf8(b""),
+            timestamp: timestamp::now_seconds()
+        });
+    }
+    
+    /// 경매 시작
+    public fun start_auction(
+        seller: &signer,
+        marketplace_addr: address,
+        token_address: address,
+        starting_bid: u64,
+        reserve_price: Option<u64>,
+        duration: u64,
+        auction_type: u8
+    ) acquires NFTMarketplace {
+        let seller_addr = signer::address_of(seller);
+        let marketplace = borrow_global_mut<NFTMarketplace>(marketplace_addr);
+        
+        // 토큰 소유권 확인
+        assert!(is_token_owner(token_address, seller_addr), E_NOT_TOKEN_OWNER);
+        
+        // 경매 기간 확인
+        assert!(duration <= marketplace.max_auction_duration, E_AUCTION_TOO_LONG);
+        assert!(duration >= 3600, E_AUCTION_TOO_SHORT); // 최소 1시간
+        
+        // 기존 경매 확인
+        assert!(!smart_table::contains(&marketplace.auctions, token_address), E_ALREADY_IN_AUCTION);
+        
+        let current_time = timestamp::now_seconds();
+        
+        let auction = Auction {
+            token_address,
+            seller: seller_addr,
+            starting_bid,
+            reserve_price,
+            current_bid: 0,
+            current_bidder: option::none(),
+            start_time: current_time,
+            end_time: current_time + duration,
+            extension_period: 600, // 10분
+            bid_history: vector::empty(),
+            auction_type,
+            is_active: true,
+            is_finalized: false,
+            created_at: current_time
+        };
+        
+        smart_table::add(&mut marketplace.auctions, token_address, auction);
+        marketplace.active_auctions = marketplace.active_auctions + 1;
+        
+        // 이벤트 발생
+        event::emit_event(&mut marketplace.marketplace_events, MarketplaceEvent {
+            event_type: string::utf8(b"auction_started"),
+            token_address,
+            user_address: seller_addr,
+            amount: option::some(starting_bid),
+            additional_data: string::utf8(b""),
+            timestamp: current_time
+        });
+    }
+    
+    /// 경매 입찰
+    public fun place_bid(
+        bidder: &signer,
+        marketplace_addr: address,
+        token_address: address,
+        bid_amount: Coin<AptosCoin>
+    ) acquires NFTMarketplace {
+        let bidder_addr = signer::address_of(bidder);
+        let marketplace = borrow_global_mut<NFTMarketplace>(marketplace_addr);
+        
+        // 경매 확인
+        assert!(smart_table::contains(&marketplace.auctions, token_address), E_AUCTION_NOT_FOUND);
+        let auction = smart_table::borrow_mut(&mut marketplace.auctions, token_address);
+        
+        assert!(auction.is_active, E_AUCTION_NOT_ACTIVE);
+        
+        let current_time = timestamp::now_seconds();
+        assert!(current_time <= auction.end_time, E_AUCTION_ENDED);
+        
+        let bid_value = coin::value(&bid_amount);
+        
+        // 입찰 금액 검증
+        let minimum_bid = if (auction.current_bid == 0) {
+            auction.starting_bid
+        } else {
+            auction.current_bid + calculate_minimum_bid_increment(auction.current_bid)
+        };
+        
+        assert!(bid_value >= minimum_bid, E_BID_TOO_LOW);
+        
+        // 이전 입찰자에게 환불
+        if (option::is_some(&auction.current_bidder)) {
+            let previous_bidder = *option::borrow(&auction.current_bidder);
+            let refund = coin::withdraw<AptosCoin>(&coin::zero<AptosCoin>(), auction.current_bid);
+            coin::deposit(previous_bidder, refund);
+        };
+        
+        // 새 입찰 기록
+        let bid = Bid {
+            bidder: bidder_addr,
+            amount: bid_value,
+            timestamp: current_time,
+            is_automatic: false
+        };
+        
+        vector::push_back(&mut auction.bid_history, bid);
+        auction.current_bid = bid_value;
+        auction.current_bidder = option::some(bidder_addr);
+        
+        // 마지막 순간 입찰 시 연장
+        if (auction.end_time - current_time <= auction.extension_period) {
+            auction.end_time = current_time + auction.extension_period;
+        };
+        
+        // 입찰 금액 예치
+        coin::deposit(@escrow_account, bid_amount);
+        
+        // 이벤트 발생
+        event::emit_event(&mut marketplace.marketplace_events, MarketplaceEvent {
+            event_type: string::utf8(b"bid_placed"),
+            token_address,
+            user_address: bidder_addr,
+            amount: option::some(bid_value),
+            additional_data: string::utf8(b""),
+            timestamp: current_time
+        });
+    }
+    
+    /// 경매 종료
+    public fun finalize_auction(
+        caller: &signer,
+        marketplace_addr: address,
+        token_address: address
+    ) acquires NFTMarketplace {
+        let marketplace = borrow_global_mut<NFTMarketplace>(marketplace_addr);
+        
+        // 경매 확인
+        assert!(smart_table::contains(&marketplace.auctions, token_address), E_AUCTION_NOT_FOUND);
+        let auction = smart_table::borrow_mut(&mut marketplace.auctions, token_address);
+        
+        assert!(auction.is_active, E_AUCTION_NOT_ACTIVE);
+        assert!(!auction.is_finalized, E_AUCTION_ALREADY_FINALIZED);
+        assert!(timestamp::now_seconds() > auction.end_time, E_AUCTION_NOT_ENDED);
+        
+        auction.is_active = false;
+        auction.is_finalized = true;
+        marketplace.active_auctions = marketplace.active_auctions - 1;
+        
+        // 낙찰 처리
+        if (option::is_some(&auction.current_bidder)) {
+            let winner = *option::borrow(&auction.current_bidder);
+            let winning_bid = auction.current_bid;
+            
+            // 리저브 가격 확인
+            let meets_reserve = if (option::is_some(&auction.reserve_price)) {
+                winning_bid >= *option::borrow(&auction.reserve_price)
+            } else {
+                true
+            };
+            
+            if (meets_reserve) {
+                // 수수료 계산 및 분배
+                let platform_fee_amount = (winning_bid * marketplace.platform_fee) / 10000;
+                let royalty_amount = calculate_royalty_amount(token_address, winning_bid);
+                let seller_amount = winning_bid - platform_fee_amount - royalty_amount;
+                
+                // 예치금에서 인출하여 분배
+                let total_payment = coin::withdraw<AptosCoin>(@escrow_account, winning_bid);
+                let platform_fee_payment = coin::extract(&mut total_payment, platform_fee_amount);
+                let royalty_payment = coin::extract(&mut total_payment, royalty_amount);
+                
+                coin::deposit(marketplace.owner, platform_fee_payment);
+                distribute_royalty(token_address, royalty_payment);
+                coin::deposit(auction.seller, total_payment);
+                
+                // NFT 소유권 이전
+                transfer_token_ownership(token_address, auction.seller, winner);
+                
+                // 거래 기록
+                let trade_record = TradeRecord {
+                    trade_id: marketplace.total_sales + 1,
+                    token_address,
+                    trade_type: string::utf8(b"auction"),
+                    seller: auction.seller,
+                    buyer: winner,
+                    price: winning_bid,
+                    currency: string::utf8(b"MOVE"),
+                    platform_fee_paid: platform_fee_amount,
+                    royalty_paid: royalty_amount,
+                    marketplace_name: marketplace.name,
+                    block_height: get_current_block_height(),
+                    timestamp: timestamp::now_seconds()
+                };
+                
+                vector::push_back(&mut marketplace.trade_history, trade_record);
+                
+                // 통계 업데이트
+                marketplace.total_volume = marketplace.total_volume + winning_bid;
+                marketplace.total_sales = marketplace.total_sales + 1;
+                
+                // 이벤트 발생
+                event::emit_event(&mut marketplace.marketplace_events, MarketplaceEvent {
+                    event_type: string::utf8(b"auction_won"),
+                    token_address,
+                    user_address: winner,
+                    amount: option::some(winning_bid),
+                    additional_data: string::utf8(b""),
+                    timestamp: timestamp::now_seconds()
+                });
+            } else {
+                // 리저브 가격 미달 - 환불
+                let refund = coin::withdraw<AptosCoin>(@escrow_account, winning_bid);
+                coin::deposit(winner, refund);
+                
+                event::emit_event(&mut marketplace.marketplace_events, MarketplaceEvent {
+                    event_type: string::utf8(b"auction_failed"),
+                    token_address,
+                    user_address: auction.seller,
+                    amount: option::some(winning_bid),
+                    additional_data: string::utf8(b"reserve_not_met"),
+                    timestamp: timestamp::now_seconds()
+                });
+            }
+        }
+    }
+    
+    /// 제안하기 (Offer)
+    public fun make_offer(
+        offerer: &signer,
+        marketplace_addr: address,
+        token_address: address,
+        offer_amount: u64,
+        duration: u64,
+        offer_payment: Coin<AptosCoin>
+    ) acquires NFTMarketplace {
+        let offerer_addr = signer::address_of(offerer);
+        let marketplace = borrow_global_mut<NFTMarketplace>(marketplace_addr);
+        
+        // 제안 금액 확인
+        assert!(coin::value(&offer_payment) >= offer_amount, E_INSUFFICIENT_PAYMENT);
+        
+        let current_time = timestamp::now_seconds();
+        
+        let offer = Offer {
+            token_address,
+            offerer: offerer_addr,
+            amount: offer_amount,
+            currency: string::utf8(b"MOVE"),
+            expires_at: current_time + duration,
+            is_collection_offer: false,
+            conditions: option::none(),
+            is_active: true,
+            created_at: current_time
+        };
+        
+        // 제안 목록에 추가
+        if (!smart_table::contains(&marketplace.offers, token_address)) {
+            smart_table::add(&mut marketplace.offers, token_address, vector::empty());
+        };
+        
+        let offers = smart_table::borrow_mut(&mut marketplace.offers, token_address);
+        vector::push_back(offers, offer);
+        
+        // 제안 금액 예치
+        coin::deposit(@escrow_account, offer_payment);
+        
+        // 이벤트 발생
+        event::emit_event(&mut marketplace.marketplace_events, MarketplaceEvent {
+            event_type: string::utf8(b"offer_made"),
+            token_address,
+            user_address: offerer_addr,
+            amount: option::some(offer_amount),
+            additional_data: string::utf8(b""),
+            timestamp: current_time
+        });
+    }
+    
+    /// 제안 수락
+    public fun accept_offer(
+        seller: &signer,
+        marketplace_addr: address,
+        token_address: address,
+        offer_index: u64
+    ) acquires NFTMarketplace {
+        let seller_addr = signer::address_of(seller);
+        let marketplace = borrow_global_mut<NFTMarketplace>(marketplace_addr);
+        
+        // 토큰 소유권 확인
+        assert!(is_token_owner(token_address, seller_addr), E_NOT_TOKEN_OWNER);
+        
+        // 제안 확인
+        assert!(smart_table::contains(&marketplace.offers, token_address), E_NO_OFFERS);
+        let offers = smart_table::borrow_mut(&mut marketplace.offers, token_address);
+        
+        assert!(offer_index < vector::length(offers), E_INVALID_OFFER_INDEX);
+        let offer = vector::borrow_mut(offers, offer_index);
+        
+        assert!(offer.is_active, E_OFFER_NOT_ACTIVE);
+        assert!(timestamp::now_seconds() <= offer.expires_at, E_OFFER_EXPIRED);
+        
+        // 제안 비활성화
+        offer.is_active = false;
+        
+        // 수수료 계산
+        let platform_fee_amount = (offer.amount * marketplace.platform_fee) / 10000;
+        let royalty_amount = calculate_royalty_amount(token_address, offer.amount);
+        let seller_amount = offer.amount - platform_fee_amount - royalty_amount;
+        
+        // 예치금에서 인출하여 분배
+        let total_payment = coin::withdraw<AptosCoin>(@escrow_account, offer.amount);
+        let platform_fee_payment = coin::extract(&mut total_payment, platform_fee_amount);
+        let royalty_payment = coin::extract(&mut total_payment, royalty_amount);
+        
+        coin::deposit(marketplace.owner, platform_fee_payment);
+        distribute_royalty(token_address, royalty_payment);
+        coin::deposit(seller_addr, total_payment);
+        
+        // NFT 소유권 이전
+        transfer_token_ownership(token_address, seller_addr, offer.offerer);
+        
+        // 거래 기록
+        let trade_record = TradeRecord {
+            trade_id: marketplace.total_sales + 1,
+            token_address,
+            trade_type: string::utf8(b"offer_accepted"),
+            seller: seller_addr,
+            buyer: offer.offerer,
+            price: offer.amount,
+            currency: offer.currency,
+            platform_fee_paid: platform_fee_amount,
+            royalty_paid: royalty_amount,
+            marketplace_name: marketplace.name,
+            block_height: get_current_block_height(),
+            timestamp: timestamp::now_seconds()
+        };
+        
+        vector::push_back(&mut marketplace.trade_history, trade_record);
+        
+        // 통계 업데이트
+        marketplace.total_volume = marketplace.total_volume + offer.amount;
+        marketplace.total_sales = marketplace.total_sales + 1;
+        
+        // 이벤트 발생
+        event::emit_event(&mut marketplace.marketplace_events, MarketplaceEvent {
+            event_type: string::utf8(b"offer_accepted"),
+            token_address,
+            user_address: seller_addr,
+            amount: option::some(offer.amount),
+            additional_data: string::utf8(b""),
+            timestamp: timestamp::now_seconds()
+        });
+    }
+    
+    /// 사용자 프로필 생성/업데이트
+    public fun update_user_profile(
+        user: &signer,
+        marketplace_addr: address,
+        username: String,
+        display_name: String,
+        bio: String,
+        avatar_uri: String,
+        banner_uri: String,
+        social_links: SimpleMap<String, String>
+    ) acquires NFTMarketplace {
+        let user_addr = signer::address_of(user);
+        let marketplace = borrow_global_mut<NFTMarketplace>(marketplace_addr);
+        
+        let profile = if (smart_table::contains(&marketplace.user_profiles, user_addr)) {
+            let existing_profile = smart_table::borrow_mut(&mut marketplace.user_profiles, user_addr);
+            existing_profile.username = username;
+            existing_profile.display_name = display_name;
+            existing_profile.bio = bio;
+            existing_profile.avatar_uri = avatar_uri;
+            existing_profile.banner_uri = banner_uri;
+            existing_profile.social_links = social_links;
+            existing_profile.last_active = timestamp::now_seconds();
+            *existing_profile
+        } else {
+            let new_profile = UserProfile {
+                user_address: user_addr,
+                username,
+                display_name,
+                bio,
+                avatar_uri,
+                banner_uri,
+                social_links,
+                tokens_owned: 0,
+                tokens_created: 0,
+                total_sales: 0,
+                total_purchases: 0,
+                total_volume: 0,
+                email_notifications: true,
+                privacy_level: 0,
+                is_verified: false,
+                verification_badges: vector::empty(),
+                created_at: timestamp::now_seconds(),
+                last_active: timestamp::now_seconds()
+            };
+            
+            smart_table::upsert(&mut marketplace.user_profiles, user_addr, new_profile);
+            new_profile
+        };
+        
+        // 이벤트 발생
+        event::emit_event(&mut marketplace.marketplace_events, MarketplaceEvent {
+            event_type: string::utf8(b"profile_updated"),
+            token_address: @0x0,
+            user_address: user_addr,
+            amount: option::none(),
+            additional_data: username,
+            timestamp: timestamp::now_seconds()
+        });
+    }
+    
+    /// 토큰 즐겨찾기 추가/제거
+    public fun toggle_favorite(
+        user: &signer,
+        marketplace_addr: address,
+        token_address: address
+    ) acquires NFTMarketplace {
+        let user_addr = signer::address_of(user);
+        let marketplace = borrow_global_mut<NFTMarketplace>(marketplace_addr);
+        
+        if (!smart_table::contains(&marketplace.user_favorites, user_addr)) {
+            smart_table::add(&mut marketplace.user_favorites, user_addr, vector::empty());
+        };
+        
+        let favorites = smart_table::borrow_mut(&mut marketplace.user_favorites, user_addr);
+        
+        let (found, index) = vector::index_of(favorites, &token_address);
+        if (found) {
+            vector::remove(favorites, index);
+            
+            // 리스팅의 즐겨찾기 수 감소
+            if (smart_table::contains(&marketplace.listings, token_address)) {
+                let listing = smart_table::borrow_mut(&mut marketplace.listings, token_address);
+                listing.favorite_count = listing.favorite_count - 1;
+            };
+        } else {
+            vector::push_back(favorites, token_address);
+            
+            // 리스팅의 즐겨찾기 수 증가
+            if (smart_table::contains(&marketplace.listings, token_address)) {
+                let listing = smart_table::borrow_mut(&mut marketplace.listings, token_address);
+                listing.favorite_count = listing.favorite_count + 1;
+            };
+        }
+    }
+    
+    /// 고급 검색
+    public fun search_tokens(
+        marketplace_addr: address,
+        filters: SearchFilters
+    ): vector<TokenSearchResult> acquires NFTMarketplace {
+        let marketplace = borrow_global<NFTMarketplace>(marketplace_addr);
+        let mut results = vector::empty();
+        
+        // 가격 필터 적용
+        if (option::is_some(&filters.min_price) || option::is_some(&filters.max_price)) {
+            results = apply_price_filter(&marketplace.price_index, &filters);
+        };
+        
+        // 카테고리 필터 적용
+        if (option::is_some(&filters.category)) {
+            let category = *option::borrow(&filters.category);
+            if (smart_table::contains(&marketplace.category_index, category)) {
+                let category_tokens = smart_table::borrow(&marketplace.category_index, category);
+                if (vector::is_empty(&results)) {
+                    results = create_search_results(category_tokens);
+                } else {
+                    results = intersect_results(&results, category_tokens);
+                }
+            }
+        };
+        
+        // 희귀도 필터 적용
+        if (option::is_some(&filters.rarity)) {
+            let rarity = *option::borrow(&filters.rarity);
+            if (smart_table::contains(&marketplace.rarity_index, rarity)) {
+                let rarity_tokens = smart_table::borrow(&marketplace.rarity_index, rarity);
+                if (vector::is_empty(&results)) {
+                    results = create_search_results(rarity_tokens);
+                } else {
+                    results = intersect_results(&results, rarity_tokens);
+                }
+            }
+        };
+        
+        // 정렬 적용
+        sort_search_results(&mut results, filters.sort_by, filters.sort_order);
+        
+        // 페이지네이션 적용
+        let start_index = (filters.page - 1) * filters.page_size;
+        let end_index = std::math::min(start_index + filters.page_size, vector::length(&results));
+        
+        let mut paginated_results = vector::empty();
+        let i = start_index;
+        while (i < end_index) {
+            vector::push_back(&mut paginated_results, *vector::borrow(&results, i));
+            i = i + 1;
+        };
+        
+        paginated_results
+    }
+    
+    struct SearchFilters has drop {
+        min_price: Option<u64>,
+        max_price: Option<u64>,
+        category: Option<String>,
+        rarity: Option<String>,
+        collection: Option<address>,
+        sort_by: u8, // 0: price, 1: date, 2: popularity
+        sort_order: u8, // 0: asc, 1: desc
+        page: u64,
+        page_size: u64
+    }
+    
+    struct TokenSearchResult has drop {
+        token_address: address,
+        name: String,
+        image_uri: String,
+        price: Option<u64>,
+        is_auction: bool,
+        seller: address,
+        favorite_count: u64,
+        view_count: u64
+    }
+    
+    // 헬퍼 함수들
+    
+    fun is_token_owner(token_address: address, user: address): bool {
+        // 실제로는 token object의 소유권 확인
+        true  // placeholder
+    }
+    
+    fun calculate_royalty_amount(token_address: address, sale_price: u64): u64 {
+        // 토큰의 로열티 계산
+        0  // placeholder
+    }
+    
+    fun distribute_royalty(token_address: address, royalty_payment: Coin<AptosCoin>) {
+        // 로열티 분배
+        coin::destroy_zero(royalty_payment);  // placeholder
+    }
+    
+    fun transfer_token_ownership(token_address: address, from: address, to: address) {
+        // NFT 소유권 이전
+        // placeholder
+    }
+    
+    fun get_current_block_height(): u64 {
+        0  // placeholder
+    }
+    
+    fun calculate_minimum_bid_increment(current_bid: u64): u64 {
+        // 최소 입찰 증가액 계산 (예: 현재 가격의 5%)
+        (current_bid * 5) / 100
+    }
+    
+    fun update_price_index(marketplace: &mut NFTMarketplace, token_address: address, price: u64) {
+        let price_range = get_price_range(price);
+        
+        if (!smart_table::contains(&marketplace.price_index, price_range)) {
+            smart_table::add(&mut marketplace.price_index, price_range, vector::empty());
+        };
+        
+        let price_tokens = smart_table::borrow_mut(&mut marketplace.price_index, price_range);
+        if (!vector::contains(price_tokens, &token_address)) {
+            vector::push_back(price_tokens, token_address);
+        }
+    }
+    
+    fun get_price_range(price: u64): u64 {
+        // 가격대별 인덱싱 (예: 0-1000, 1000-10000, 10000-100000...)
+        if (price < 1000000) 0  // < 0.001 MOVE
+        else if (price < 10000000) 1  // < 0.01 MOVE
+        else if (price < 100000000) 2  // < 0.1 MOVE
+        else if (price < 1000000000) 3  // < 1 MOVE
+        else 4  // >= 1 MOVE
+    }
+    
+    fun update_user_stats_after_purchase(
+        marketplace: &mut NFTMarketplace,
+        buyer: address,
+        amount: u64
+    ) {
+        if (smart_table::contains(&marketplace.user_profiles, buyer)) {
+            let profile = smart_table::borrow_mut(&mut marketplace.user_profiles, buyer);
+            profile.total_purchases = profile.total_purchases + 1;
+            profile.total_volume = profile.total_volume + amount;
+        }
+    }
+    
+    fun update_user_stats_after_sale(
+        marketplace: &mut NFTMarketplace,
+        seller: address,
+        amount: u64
+    ) {
+        if (smart_table::contains(&marketplace.user_profiles, seller)) {
+            let profile = smart_table::borrow_mut(&mut marketplace.user_profiles, seller);
+            profile.total_sales = profile.total_sales + 1;
+            profile.total_volume = profile.total_volume + amount;
+        }
+    }
+    
+    fun update_collection_stats_after_sale(
+        marketplace: &mut NFTMarketplace,
+        token_address: address,
+        sale_price: u64
+    ) {
+        let collection_address = get_token_collection_address(token_address);
+        
+        if (smart_table::contains(&marketplace.collection_stats, collection_address)) {
+            let stats = smart_table::borrow_mut(&mut marketplace.collection_stats, collection_address);
+            stats.daily_volume = stats.daily_volume + sale_price;
+            stats.daily_sales = stats.daily_sales + 1;
+            
+            // 바닥가 업데이트
+            if (option::is_none(&stats.floor_price) || 
+                sale_price < *option::borrow(&stats.floor_price)) {
+                stats.floor_price = option::some(sale_price);
+            };
+            
+            // 천장가 업데이트
+            if (option::is_none(&stats.ceiling_price) || 
+                sale_price > *option::borrow(&stats.ceiling_price)) {
+                stats.ceiling_price = option::some(sale_price);
+            };
+            
+            stats.last_updated = timestamp::now_seconds();
+        }
+    }
+    
+    fun get_token_collection_address(token_address: address): address {
+        // 토큰의 컬렉션 주소 조회
+        @0x0  // placeholder
+    }
+    
+    fun apply_price_filter(
+        price_index: &SmartTable<u64, vector<address>>,
+        filters: &SearchFilters
+    ): vector<TokenSearchResult> {
+        // 가격 필터 적용 로직
+        vector::empty()  // placeholder
+    }
+    
+    fun create_search_results(tokens: &vector<address>): vector<TokenSearchResult> {
+        // 토큰 주소들을 검색 결과로 변환
+        vector::empty()  // placeholder
+    }
+    
+    fun intersect_results(
+        results: &vector<TokenSearchResult>,
+        tokens: &vector<address>
+    ): vector<TokenSearchResult> {
+        // 두 결과 집합의 교집합
+        vector::empty()  // placeholder
+    }
+    
+    fun sort_search_results(
+        results: &mut vector<TokenSearchResult>,
+        sort_by: u8,
+        sort_order: u8
+    ) {
+        // 검색 결과 정렬
+        // placeholder
+    }
+    
+    // 조회 함수들
+    
+    /// 마켓플레이스 통계 조회
+    public fun get_marketplace_stats(marketplace_addr: address): MarketplaceStats acquires NFTMarketplace {
+        let marketplace = borrow_global<NFTMarketplace>(marketplace_addr);
+        
+        MarketplaceStats {
+            total_volume: marketplace.total_volume,
+            total_sales: marketplace.total_sales,
+            active_listings: marketplace.active_listings,
+            active_auctions: marketplace.active_auctions,
+            total_users: smart_table::length(&marketplace.user_profiles),
+            verified_collections: count_verified_collections(&marketplace.verified_collections)
+        }
+    }
+    
+    /// 사용자 프로필 조회
+    public fun get_user_profile(
+        marketplace_addr: address,
+        user_addr: address
+    ): Option<UserProfile> acquires NFTMarketplace {
+        let marketplace = borrow_global<NFTMarketplace>(marketplace_addr);
+        
+        if (smart_table::contains(&marketplace.user_profiles, user_addr)) {
+            option::some(*smart_table::borrow(&marketplace.user_profiles, user_addr))
+        } else {
+            option::none()
+        }
+    }
+    
+    /// 컬렉션 통계 조회
+    public fun get_collection_stats(
+        marketplace_addr: address,
+        collection_addr: address
+    ): Option<CollectionStats> acquires NFTMarketplace {
+        let marketplace = borrow_global<NFTMarketplace>(marketplace_addr);
+        
+        if (smart_table::contains(&marketplace.collection_stats, collection_addr)) {
+            option::some(*smart_table::borrow(&marketplace.collection_stats, collection_addr))
+        } else {
+            option::none()
+        }
+    }
+    
+    struct MarketplaceStats has drop {
+        total_volume: u64,
+        total_sales: u64,
+        active_listings: u64,
+        active_auctions: u64,
+        total_users: u64,
+        verified_collections: u64
+    }
+    
+    fun count_verified_collections(collections: &SmartTable<address, CollectionInfo>): u64 {
+        let mut count = 0;
+        smart_table::for_each_ref(collections, |_, collection_info| {
+            if (collection_info.is_verified) {
+                count = count + 1;
+            }
+        });
+        count
+    }
+    
+    // 에러 코드
+    const E_NOT_TOKEN_OWNER: u64 = 1;
+    const E_PRICE_TOO_LOW: u64 = 2;
+    const E_ALREADY_LISTED: u64 = 3;
+    const E_NOT_LISTED: u64 = 4;
+    const E_LISTING_NOT_ACTIVE: u64 = 5;
+    const E_LISTING_EXPIRED: u64 = 6;
+    const E_INSUFFICIENT_PAYMENT: u64 = 7;
+    const E_ALREADY_IN_AUCTION: u64 = 8;
+    const E_AUCTION_TOO_LONG: u64 = 9;
+    const E_AUCTION_TOO_SHORT: u64 = 10;
+    const E_AUCTION_NOT_FOUND: u64 = 11;
+    const E_AUCTION_NOT_ACTIVE: u64 = 12;
+    const E_AUCTION_ENDED: u64 = 13;
+    const E_BID_TOO_LOW: u64 = 14;
+    const E_AUCTION_ALREADY_FINALIZED: u64 = 15;
+    const E_AUCTION_NOT_ENDED: u64 = 16;
+    const E_NO_OFFERS: u64 = 17;
+    const E_INVALID_OFFER_INDEX: u64 = 18;
+    const E_OFFER_NOT_ACTIVE: u64 = 19;
+    const E_OFFER_EXPIRED: u64 = 20;
+    const E_INVALID_PLATFORM_FEE: u64 = 21;
+}
+```
+
+## 🎨 React Frontend 통합
+
+### 마켓플레이스 대시보드 컴포넌트
+```tsx
+import React, { useState, useEffect, useCallback } from 'react';
+import { MovementClient, MovementAccount } from '@movementnetwork/ts-sdk';
+import { Search, Filter, Heart, ShoppingCart, Gavel, TrendingUp } from 'lucide-react';
+
+interface NFTItem {
+  tokenAddress: string;
+  name: string;
+  description: string;
+  imageUri: string;
+  price?: number;
+  isAuction: boolean;
+  seller: string;
+  favoriteCount: number;
+  viewCount: number;
+  collection: {
+    name: string;
+    verified: boolean;
+  };
+  rarity?: string;
+  attributes: Array<{
+    traitType: string;
+    value: string;
+  }>;
+}
+
+interface MarketplaceStats {
+  totalVolume: number;
+  totalSales: number;
+  activeListings: number;
+  activeAuctions: number;
+  totalUsers: number;
+  floorPrice: number;
+}
+
+const NFTMarketplaceDashboard: React.FC = () => {
+  const [nftItems, setNftItems] = useState<NFTItem[]>([]);
+  const [marketplaceStats, setMarketplaceStats] = useState<MarketplaceStats | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filters, setFilters] = useState({
+    minPrice: '',
+    maxPrice: '',
+    category: '',
+    rarity: '',
+    sortBy: 'date' as 'price' | 'date' | 'popularity',
+    sortOrder: 'desc' as 'asc' | 'desc'
+  });
+  const [favorites, setFavorites] = useState<Set<string>>(new Set());
+  const [currentPage, setCurrentPage] = useState(1);
+  const [loading, setLoading] = useState(true);
+
+  // 마켓플레이스 데이터 로드
+  const loadMarketplaceData = useCallback(async () => {
+    setLoading(true);
+    try {
+      // 실제로는 Movement SDK를 사용하여 데이터 로드
+      const mockData: NFTItem[] = [
+        {
+          tokenAddress: '0x123...',
+          name: 'Cosmic Dragon #001',
+          description: 'A legendary cosmic dragon with mystical powers',
+          imageUri: 'https://example.com/dragon1.png',
+          price: 1500000000, // 1.5 MOVE
+          isAuction: false,
+          seller: '0xabc...',
+          favoriteCount: 42,
+          viewCount: 1337,
+          collection: {
+            name: 'Cosmic Dragons',
+            verified: true
+          },
+          rarity: 'Legendary',
+          attributes: [
+            { traitType: 'Element', value: 'Cosmic' },
+            { traitType: 'Power Level', value: '9000' }
+          ]
+        },
+        // ... 더 많은 NFT 데이터
+      ];
+
+      const mockStats: MarketplaceStats = {
+        totalVolume: 50000000000, // 50 MOVE
+        totalSales: 1234,
+        activeListings: 456,
+        activeAuctions: 78,
+        totalUsers: 5678,
+        floorPrice: 100000000 // 0.1 MOVE
+      };
+
+      setNftItems(mockData);
+      setMarketplaceStats(mockStats);
+    } catch (error) {
+      console.error('Failed to load marketplace data:', error);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadMarketplaceData();
+  }, [loadMarketplaceData]);
+
+  // 검색 및 필터링
+  const filteredItems = nftItems.filter(item => {
+    const matchesSearch = item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+                         item.collection.name.toLowerCase().includes(searchQuery.toLowerCase());
+    
+    const matchesPrice = (!filters.minPrice || item.price >= parseInt(filters.minPrice)) &&
+                        (!filters.maxPrice || item.price <= parseInt(filters.maxPrice));
+    
+    const matchesCategory = !filters.category || item.collection.name === filters.category;
+    const matchesRarity = !filters.rarity || item.rarity === filters.rarity;
+    
+    return matchesSearch && matchesPrice && matchesCategory && matchesRarity;
+  });
+
+  // 즐겨찾기 토글
+  const toggleFavorite = async (tokenAddress: string) => {
+    const newFavorites = new Set(favorites);
+    if (favorites.has(tokenAddress)) {
+      newFavorites.delete(tokenAddress);
+    } else {
+      newFavorites.add(tokenAddress);
+    }
+    setFavorites(newFavorites);
+    
+    // 실제로는 블록체인에 즐겨찾기 상태 저장
+  };
+
+  // NFT 구매
+  const buyNFT = async (item: NFTItem) => {
+    try {
+      // 실제로는 Movement SDK를 사용하여 구매 트랜잭션 실행
+      console.log(`Buying NFT ${item.name} for ${item.price} MOVE`);
+      
+      // 구매 완료 후 데이터 새로고침
+      await loadMarketplaceData();
+    } catch (error) {
+      console.error('Failed to buy NFT:', error);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      {/* 헤더 */}
+      <header className="bg-white shadow-sm border-b">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+          <div className="flex items-center justify-between">
+            <h1 className="text-3xl font-bold text-gray-900">Movement NFT Marketplace</h1>
+            <div className="flex items-center space-x-4">
+              <button className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg">
+                Connect Wallet
+              </button>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* 통계 대시보드 */}
+      {marketplaceStats && (
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            <div className="bg-white p-6 rounded-lg shadow">
+              <div className="flex items-center">
+                <TrendingUp className="h-8 w-8 text-green-600" />
+                <div className="ml-4">
+                  <p className="text-sm font-medium text-gray-600">Total Volume</p>
+                  <p className="text-2xl font-bold text-gray-900">
+                    {(marketplaceStats.totalVolume / 1e9).toFixed(1)} MOVE
+                  </p>
+                </div>
+              </div>
+            </div>
+            
+            <div className="bg-white p-6 rounded-lg shadow">
+              <div className="flex items-center">
+                <ShoppingCart className="h-8 w-8 text-blue-600" />
+                <div className="ml-4">
+                  <p className="text-sm font-medium text-gray-600">Total Sales</p>
+                  <p className="text-2xl font-bold text-gray-900">
+                    {marketplaceStats.totalSales.toLocaleString()}
+                  </p>
+                </div>
+              </div>
+            </div>
+            
+            <div className="bg-white p-6 rounded-lg shadow">
+              <div className="flex items-center">
+                <Gavel className="h-8 w-8 text-purple-600" />
+                <div className="ml-4">
+                  <p className="text-sm font-medium text-gray-600">Active Listings</p>
+                  <p className="text-2xl font-bold text-gray-900">
+                    {marketplaceStats.activeListings}
+                  </p>
+                </div>
+              </div>
+            </div>
+            
+            <div className="bg-white p-6 rounded-lg shadow">
+              <div className="flex items-center">
+                <Heart className="h-8 w-8 text-red-600" />
+                <div className="ml-4">
+                  <p className="text-sm font-medium text-gray-600">Floor Price</p>
+                  <p className="text-2xl font-bold text-gray-900">
+                    {(marketplaceStats.floorPrice / 1e9).toFixed(2)} MOVE
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="flex flex-col lg:flex-row gap-8">
+          {/* 사이드바 - 필터 */}
+          <div className="w-full lg:w-64 flex-shrink-0">
+            <div className="bg-white p-6 rounded-lg shadow">
+              <h3 className="text-lg font-medium text-gray-900 mb-4">Filters</h3>
+              
+              {/* 가격 필터 */}
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Price Range (MOVE)
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="number"
+                    placeholder="Min"
+                    value={filters.minPrice}
+                    onChange={(e) => setFilters({...filters, minPrice: e.target.value})}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                  />
+                  <input
+                    type="number"
+                    placeholder="Max"
+                    value={filters.maxPrice}
+                    onChange={(e) => setFilters({...filters, maxPrice: e.target.value})}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                  />
+                </div>
+              </div>
+
+              {/* 카테고리 필터 */}
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Collection
+                </label>
+                <select
+                  value={filters.category}
+                  onChange={(e) => setFilters({...filters, category: e.target.value})}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                >
+                  <option value="">All Collections</option>
+                  <option value="Cosmic Dragons">Cosmic Dragons</option>
+                  <option value="Pixel Heroes">Pixel Heroes</option>
+                  <option value="Abstract Art">Abstract Art</option>
+                </select>
+              </div>
+
+              {/* 희귀도 필터 */}
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Rarity
+                </label>
+                <select
+                  value={filters.rarity}
+                  onChange={(e) => setFilters({...filters, rarity: e.target.value})}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                >
+                  <option value="">All Rarities</option>
+                  <option value="Common">Common</option>
+                  <option value="Uncommon">Uncommon</option>
+                  <option value="Rare">Rare</option>
+                  <option value="Epic">Epic</option>
+                  <option value="Legendary">Legendary</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* 메인 콘텐츠 */}
+          <div className="flex-1">
+            {/* 검색 바 */}
+            <div className="bg-white p-4 rounded-lg shadow mb-6">
+              <div className="flex items-center space-x-4">
+                <div className="flex-1 relative">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-5 w-5" />
+                  <input
+                    type="text"
+                    placeholder="Search NFTs, collections, or creators..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                </div>
+                
+                <select
+                  value={`${filters.sortBy}-${filters.sortOrder}`}
+                  onChange={(e) => {
+                    const [sortBy, sortOrder] = e.target.value.split('-');
+                    setFilters({
+                      ...filters,
+                      sortBy: sortBy as 'price' | 'date' | 'popularity',
+                      sortOrder: sortOrder as 'asc' | 'desc'
+                    });
+                  }}
+                  className="px-4 py-2 border border-gray-300 rounded-lg"
+                >
+                  <option value="date-desc">Newest First</option>
+                  <option value="date-asc">Oldest First</option>
+                  <option value="price-asc">Price: Low to High</option>
+                  <option value="price-desc">Price: High to Low</option>
+                  <option value="popularity-desc">Most Popular</option>
+                </select>
+              </div>
+            </div>
+
+            {/* NFT 그리드 */}
+            {loading ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                {[...Array(8)].map((_, i) => (
+                  <div key={i} className="bg-white rounded-lg shadow overflow-hidden animate-pulse">
+                    <div className="h-48 bg-gray-300"></div>
+                    <div className="p-4">
+                      <div className="h-4 bg-gray-300 rounded mb-2"></div>
+                      <div className="h-4 bg-gray-300 rounded w-2/3"></div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                {filteredItems.map((item) => (
+                  <div key={item.tokenAddress} className="bg-white rounded-lg shadow overflow-hidden hover:shadow-lg transition-shadow">
+                    <div className="relative">
+                      <img
+                        src={item.imageUri}
+                        alt={item.name}
+                        className="w-full h-48 object-cover"
+                      />
+                      <button
+                        onClick={() => toggleFavorite(item.tokenAddress)}
+                        className={`absolute top-2 right-2 p-2 rounded-full ${
+                          favorites.has(item.tokenAddress)
+                            ? 'bg-red-500 text-white'
+                            : 'bg-white text-gray-600 hover:text-red-500'
+                        }`}
+                      >
+                        <Heart className="h-4 w-4" />
+                      </button>
+                      
+                      {item.collection.verified && (
+                        <div className="absolute top-2 left-2 bg-blue-500 text-white px-2 py-1 rounded text-xs">
+                          ✓ Verified
+                        </div>
+                      )}
+                      
+                      {item.rarity && (
+                        <div className={`absolute bottom-2 left-2 px-2 py-1 rounded text-xs font-medium ${
+                          item.rarity === 'Legendary' ? 'bg-purple-100 text-purple-800' :
+                          item.rarity === 'Epic' ? 'bg-orange-100 text-orange-800' :
+                          item.rarity === 'Rare' ? 'bg-blue-100 text-blue-800' :
+                          'bg-gray-100 text-gray-800'
+                        }`}>
+                          {item.rarity}
+                        </div>
+                      )}
+                    </div>
+                    
+                    <div className="p-4">
+                      <div className="flex items-start justify-between mb-2">
+                        <div>
+                          <h3 className="font-medium text-gray-900 truncate">{item.name}</h3>
+                          <p className="text-sm text-gray-600">{item.collection.name}</p>
+                        </div>
+                      </div>
+                      
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center space-x-4 text-xs text-gray-500">
+                          <span>❤️ {item.favoriteCount}</span>
+                          <span>👁️ {item.viewCount}</span>
+                        </div>
+                      </div>
+                      
+                      {item.price && (
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <p className="text-xs text-gray-600">Price</p>
+                            <p className="font-bold text-gray-900">
+                              {(item.price / 1e9).toFixed(2)} MOVE
+                            </p>
+                          </div>
+                          
+                          <button
+                            onClick={() => buyNFT(item)}
+                            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium"
+                          >
+                            {item.isAuction ? 'Bid' : 'Buy Now'}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default NFTMarketplaceDashboard;
+```
+
+## 🚀 프로덕션 배포 가이드
+
+### 배포 체크리스트
+```bash
+# 1. 스마트 계약 검증
+movement move test --coverage
+movement move prove --verify-all
+movement move audit --strict
+
+# 2. 가스 최적화 확인
+movement move benchmark --optimization-level 3
+
+# 3. 보안 감사
+movement security-audit --comprehensive
+movement vulnerability-scan
+
+# 4. 테스트넷 배포 및 검증
+movement deploy --network testnet --verify-contracts
+movement integration-test --network testnet
+
+# 5. 메인넷 배포 (신중히!)
+movement deploy --network mainnet --confirm-risks
+```
+
+### 운영 모니터링 설정
+```typescript
+// 마켓플레이스 모니터링 시스템
+class MarketplaceMonitor {
+  private client: MovementClient;
+  private alertThresholds = {
+    errorRate: 5, // 5% 이상
+    responseTime: 2000, // 2초 이상
+    gasPrice: 1000000, // 0.001 MOVE 이상
+    dailyVolume: 10000000000 // 10 MOVE 이상
+  };
+  
+  async startMonitoring() {
+    setInterval(async () => {
+      await this.checkSystemHealth();
+      await this.monitorTransactions();
+      await this.trackPerformanceMetrics();
+      await this.generateDailyReport();
+    }, 30000); // 30초마다
+  }
+  
+  private async checkSystemHealth() {
+    // 시스템 상태 확인
+    const health = await this.client.getHealth();
+    if (!health.isHealthy) {
+      await this.sendAlert('System unhealthy', health);
+    }
+  }
+  
+  private async monitorTransactions() {
+    // 트랜잭션 모니터링
+    const recentTxs = await this.getRecentTransactions(100);
+    const errorRate = this.calculateErrorRate(recentTxs);
+    
+    if (errorRate > this.alertThresholds.errorRate) {
+      await this.sendAlert('High error rate detected', { errorRate });
+    }
+  }
+}
+```
+
+## 🔗 다음 단계
+
+축하합니다! NFT 개발의 모든 과정을 완료하셨습니다. 이제 다음 섹션으로 넘어가세요:
+
+**[DeFi 개발 →](/dapp-development/defi-development)**
+
+## 📚 참고 자료
+
+- [Movement 개발자 포털](https://developer.movementnetwork.xyz/)
+- [NFT 마켓플레이스 예제](https://github.com/movementlabsxyz/nft-marketplace)
+- [React 통합 가이드](https://docs.movementnetwork.xyz/react-integration)
+- [프로덕션 배포 가이드](https://docs.movementnetwork.xyz/production-deployment)
+
+---
+
+*Movement Network에서 완전한 NFT 생태계를 구축하고 운영하세요! 🏪✨*

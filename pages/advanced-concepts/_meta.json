@@ -1,3 +1,7 @@
 {
-  "index": "고급 개념"
-} 
+  "index": "개요",
+  "smart-vector-table": "📊 Smart Vector & Smart Table",
+  "resource-account-capability": "🔐 Resource Account & Capability",
+  "event-object-signer": "📡 Event, Object, Signer 심화",
+  "access-control-security": "🛡️ Access Control & Security"
+}

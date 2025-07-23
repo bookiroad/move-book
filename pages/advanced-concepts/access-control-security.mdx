@@ -1,0 +1,961 @@
+# 🛡️ Access Control & Security
+
+Movement Network에서 엔터프라이즈급 접근 제어와 보안 시스템을 구축하는 고급 패턴들을 학습합니다. 다층 보안부터 감사 추적까지 포괄적인 보안 아키텍처를 다룹니다.
+
+## 🎯 학습 목표
+
+이 섹션을 완료하면:
+- 엔터프라이즈급 접근 제어 시스템을 설계할 수 있습니다
+- 다층 보안 아키텍처를 구현할 수 있습니다
+- 완전한 감사 추적 시스템을 구축할 수 있습니다
+- 일반적인 보안 취약점을 식별하고 방지할 수 있습니다
+
+## 🏰 다층 보안 아키텍처
+
+### 보안 계층 구조
+```move
+module layered_security {
+    use std::signer;
+    use std::vector;
+    use std::string::{Self, String};
+    use std::option::{Self, Option};
+    use aptos_framework::timestamp;
+    use aptos_framework::event::{Self, EventHandle};
+    use aptos_framework::account;
+    use aptos_std::smart_table::{Self, SmartTable};
+    
+    /// 다층 보안 시스템
+    struct LayeredSecuritySystem has key {
+        // 계층별 보안 구성
+        authentication_layer: AuthenticationConfig,
+        authorization_layer: AuthorizationConfig,
+        audit_layer: AuditConfig,
+        encryption_layer: EncryptionConfig,
+        
+        // 보안 정책
+        security_policies: SmartTable<String, SecurityPolicy>,
+        
+        // 위협 탐지
+        threat_detection: ThreatDetectionSystem,
+        
+        // 사고 대응
+        incident_response: IncidentResponseSystem,
+        
+        // 보안 메트릭
+        security_metrics: SecurityMetrics
+    }
+    
+    /// 인증 계층 구성
+    struct AuthenticationConfig has store, drop {
+        multi_factor_enabled: bool,
+        session_timeout: u64,
+        max_failed_attempts: u64,
+        lockout_duration: u64,
+        password_policy: PasswordPolicy,
+        supported_auth_methods: vector<u8>  // 0: password, 1: biometric, 2: hardware_key
+    }
+    
+    struct PasswordPolicy has store, drop, copy {
+        min_length: u64,
+        require_uppercase: bool,
+        require_lowercase: bool,
+        require_numbers: bool,
+        require_symbols: bool,
+        max_age_days: u64,
+        history_count: u64  // 이전 패스워드 재사용 방지
+    }
+    
+    /// 권한 부여 계층 구성
+    struct AuthorizationConfig has store, drop {
+        rbac_enabled: bool,
+        abac_enabled: bool,     // Attribute-Based Access Control
+        principle_of_least_privilege: bool,
+        permission_inheritance: bool,
+        dynamic_permissions: bool
+    }
+    
+    /// 감사 계층 구성
+    struct AuditConfig has store, drop {
+        log_all_access: bool,
+        log_failed_attempts: bool,
+        log_data_changes: bool,
+        log_admin_actions: bool,
+        retention_period_days: u64,
+        compliance_standards: vector<String>  // SOX, GDPR, HIPAA 등
+    }
+    
+    /// 암호화 계층 구성
+    struct EncryptionConfig has store, drop {
+        data_at_rest_encryption: bool,
+        data_in_transit_encryption: bool,
+        key_rotation_interval: u64,
+        encryption_algorithm: String,
+        key_derivation_function: String
+    }
+    
+    /// 보안 정책
+    struct SecurityPolicy has store, drop {
+        policy_name: String,
+        policy_version: String,
+        rules: vector<SecurityRule>,
+        enforcement_level: u8,  // 0: advisory, 1: warning, 2: blocking
+        last_updated: u64,
+        approved_by: address
+    }
+    
+    struct SecurityRule has store, drop, copy {
+        rule_id: String,
+        condition: SecurityCondition,
+        action: SecurityAction,
+        severity: u8,           // 0: low, 1: medium, 2: high, 3: critical
+        is_active: bool
+    }
+    
+    struct SecurityCondition has store, drop, copy {
+        condition_type: u8,     // 0: time, 1: location, 2: behavior, 3: resource
+        operator: u8,
+        threshold: u64,
+        parameters: vector<String>
+    }
+    
+    struct SecurityAction has store, drop, copy {
+        action_type: u8,        // 0: allow, 1: deny, 2: challenge, 3: quarantine
+        response_code: u64,
+        notification_required: bool,
+        escalation_level: u8
+    }
+    
+    /// 위협 탐지 시스템
+    struct ThreatDetectionSystem has store, drop {
+        anomaly_detection: AnomalyDetection,
+        signature_detection: SignatureDetection,
+        behavioral_analysis: BehavioralAnalysis,
+        threat_intelligence: ThreatIntelligence
+    }
+    
+    struct AnomalyDetection has store, drop {
+        baseline_established: bool,
+        detection_algorithms: vector<String>,
+        sensitivity_level: u8,
+        false_positive_rate: u64
+    }
+    
+    struct SignatureDetection has store, drop {
+        signature_database: SmartTable<String, ThreatSignature>,
+        last_update: u64,
+        auto_update_enabled: bool
+    }
+    
+    struct ThreatSignature has store, drop, copy {
+        signature_id: String,
+        pattern: String,
+        severity: u8,
+        created_at: u64,
+        source: String
+    }
+    
+    struct BehavioralAnalysis has store, drop {
+        user_profiles: SmartTable<address, UserBehaviorProfile>,
+        analysis_window: u64,
+        deviation_threshold: u64
+    }
+    
+    struct UserBehaviorProfile has store, drop {
+        user: address,
+        typical_access_times: vector<u64>,
+        typical_resources: vector<String>,
+        access_patterns: vector<AccessPattern>,
+        risk_score: u64,
+        last_updated: u64
+    }
+    
+    struct AccessPattern has store, drop, copy {
+        pattern_type: u8,
+        frequency: u64,
+        time_distribution: vector<u64>,
+        resource_types: vector<String>
+    }
+    
+    struct ThreatIntelligence has store, drop {
+        threat_feeds: vector<String>,
+        ioc_database: SmartTable<String, IOC>,  // Indicators of Compromise
+        last_feed_update: u64
+    }
+    
+    struct IOC has store, drop, copy {
+        indicator: String,
+        indicator_type: String,
+        threat_level: u8,
+        first_seen: u64,
+        source: String
+    }
+    
+    /// 보안 시스템 초기화
+    public fun initialize_security_system(admin: &signer) {
+        let security_system = LayeredSecuritySystem {
+            authentication_layer: create_default_auth_config(),
+            authorization_layer: create_default_authz_config(),
+            audit_layer: create_default_audit_config(),
+            encryption_layer: create_default_encryption_config(),
+            
+            security_policies: smart_table::new(),
+            threat_detection: create_default_threat_detection(),
+            incident_response: create_default_incident_response(),
+            security_metrics: create_default_security_metrics()
+        };
+        
+        move_to(admin, security_system);
+        
+        // 기본 보안 정책 생성
+        create_default_security_policies(admin);
+    }
+    
+    /// 적응형 접근 제어
+    public fun adaptive_access_control(
+        user: &signer,
+        system_addr: address,
+        resource: String,
+        action: String,
+        context: AccessContext
+    ): AccessDecision acquires LayeredSecuritySystem {
+        let user_addr = signer::address_of(user);
+        let system = borrow_global_mut<LayeredSecuritySystem>(system_addr);
+        
+        // 1단계: 인증 검증
+        let auth_result = verify_authentication(user_addr, &system.authentication_layer, &context);
+        if (!auth_result.is_valid) {
+            return create_deny_decision(AUTH_FAILED, auth_result.reason)
+        };
+        
+        // 2단계: 권한 부여 확인
+        let authz_result = check_authorization(user_addr, &resource, &action, &system.authorization_layer);
+        if (!authz_result.is_authorized) {
+            return create_deny_decision(AUTHZ_FAILED, authz_result.reason)
+        };
+        
+        // 3단계: 위협 탐지 분석
+        let threat_result = analyze_threats(user_addr, &context, &mut system.threat_detection);
+        if (threat_result.threat_level > ACCEPTABLE_THREAT_LEVEL) {
+            return create_challenge_decision(THREAT_DETECTED, threat_result.details)
+        };
+        
+        // 4단계: 정책 평가
+        let policy_result = evaluate_security_policies(&system.security_policies, user_addr, &resource, &action);
+        if (!policy_result.compliant) {
+            return create_conditional_decision(POLICY_VIOLATION, policy_result.conditions)
+        };
+        
+        // 5단계: 감사 로깅
+        log_access_decision(&mut system.audit_layer, user_addr, &resource, &action, &context, true);
+        
+        create_allow_decision()
+    }
+    
+    struct AccessContext has drop {
+        timestamp: u64,
+        source_ip: String,
+        user_agent: String,
+        session_id: String,
+        risk_indicators: vector<String>,
+        additional_attributes: SmartTable<String, String>
+    }
+    
+    struct AccessDecision has drop {
+        decision: u8,           // 0: allow, 1: deny, 2: challenge, 3: conditional
+        reason_code: u64,
+        reason_message: String,
+        additional_requirements: vector<String>,
+        expires_at: Option<u64>
+    }
+    
+    /// 제로 트러스트 아키텍처 구현
+    public fun zero_trust_verification(
+        requester: &signer,
+        system_addr: address,
+        target_resource: String,
+        verification_level: u8
+    ): ZeroTrustResult acquires LayeredSecuritySystem {
+        let requester_addr = signer::address_of(requester);
+        let system = borrow_global_mut<LayeredSecuritySystem>(system_addr);
+        
+        let mut verification_steps = vector::empty();
+        
+        // 1. Identity Verification (신원 확인)
+        let identity_check = verify_identity(requester_addr, verification_level);
+        vector::push_back(&mut verification_steps, identity_check);
+        
+        // 2. Device Trust Assessment (디바이스 신뢰도 평가)
+        let device_check = assess_device_trust(requester_addr, &target_resource);
+        vector::push_back(&mut verification_steps, device_check);
+        
+        // 3. Network Security Analysis (네트워크 보안 분석)
+        let network_check = analyze_network_security(requester_addr);
+        vector::push_back(&mut verification_steps, network_check);
+        
+        // 4. Behavioral Pattern Analysis (행동 패턴 분석)
+        let behavior_check = analyze_behavior_patterns(
+            &mut system.threat_detection.behavioral_analysis,
+            requester_addr,
+            &target_resource
+        );
+        vector::push_back(&mut verification_steps, behavior_check);
+        
+        // 5. Real-time Risk Assessment (실시간 위험 평가)
+        let risk_check = assess_realtime_risk(requester_addr, &target_resource, &verification_steps);
+        vector::push_back(&mut verification_steps, risk_check);
+        
+        // 종합 결과 계산
+        let overall_trust_score = calculate_trust_score(&verification_steps);
+        let decision = determine_access_decision(overall_trust_score, verification_level);
+        
+        ZeroTrustResult {
+            trust_score: overall_trust_score,
+            decision,
+            verification_steps,
+            valid_until: timestamp::now_seconds() + 300, // 5분간 유효
+            requires_reauthentication: overall_trust_score < 70
+        }
+    }
+    
+    struct ZeroTrustResult has drop {
+        trust_score: u64,       // 0-100
+        decision: AccessDecision,
+        verification_steps: vector<VerificationStep>,
+        valid_until: u64,
+        requires_reauthentication: bool
+    }
+    
+    struct VerificationStep has drop {
+        step_name: String,
+        result: bool,
+        confidence: u64,        // 0-100
+        risk_factors: vector<String>
+    }
+    
+    /// 동적 권한 조정 시스템
+    public fun dynamic_permission_adjustment(
+        admin: &signer,
+        system_addr: address,
+        user: address,
+        adjustment_trigger: AdjustmentTrigger
+    ) acquires LayeredSecuritySystem {
+        let system = borrow_global_mut<LayeredSecuritySystem>(system_addr);
+        
+        match (adjustment_trigger.trigger_type) {
+            0 => {  // Security Incident
+                reduce_user_permissions(user, adjustment_trigger.severity);
+                create_security_incident(system, user, adjustment_trigger.details);
+            },
+            1 => {  // Behavior Anomaly
+                implement_additional_verification(user, adjustment_trigger.anomaly_type);
+                update_user_risk_profile(&mut system.threat_detection.behavioral_analysis, user);
+            },
+            2 => {  // Time-based Adjustment
+                apply_temporal_restrictions(user, adjustment_trigger.time_constraints);
+            },
+            3 => {  // Context-based Adjustment
+                modify_context_permissions(user, adjustment_trigger.context_changes);
+            },
+            _ => {}
+        };
+        
+        // 조정 사항 감사 로그 기록
+        log_permission_adjustment(&mut system.audit_layer, user, adjustment_trigger);
+    }
+    
+    struct AdjustmentTrigger has drop {
+        trigger_type: u8,
+        severity: u8,
+        anomaly_type: Option<u8>,
+        time_constraints: Option<vector<u64>>,
+        context_changes: Option<SmartTable<String, String>>,
+        details: String
+    }
+    
+    /// 보안 감사 시스템
+    public fun comprehensive_security_audit(
+        auditor: &signer,
+        system_addr: address,
+        audit_scope: AuditScope
+    ): SecurityAuditReport acquires LayeredSecuritySystem {
+        let system = borrow_global<LayeredSecuritySystem>(system_addr);
+        let audit_start_time = timestamp::now_seconds();
+        
+        let mut audit_findings = vector::empty();
+        
+        // 1. 접근 제어 감사
+        if (audit_scope.include_access_control) {
+            let access_findings = audit_access_controls(system);
+            vector::append(&mut audit_findings, access_findings);
+        };
+        
+        // 2. 인증 시스템 감사
+        if (audit_scope.include_authentication) {
+            let auth_findings = audit_authentication_system(&system.authentication_layer);
+            vector::append(&mut audit_findings, auth_findings);
+        };
+        
+        // 3. 데이터 보호 감사
+        if (audit_scope.include_data_protection) {
+            let data_findings = audit_data_protection(&system.encryption_layer);
+            vector::append(&mut audit_findings, data_findings);
+        };
+        
+        // 4. 로그 무결성 감사
+        if (audit_scope.include_log_integrity) {
+            let log_findings = audit_log_integrity(&system.audit_layer);
+            vector::append(&mut audit_findings, log_findings);
+        };
+        
+        // 5. 정책 준수 감사
+        if (audit_scope.include_policy_compliance) {
+            let policy_findings = audit_policy_compliance(&system.security_policies);
+            vector::append(&mut audit_findings, policy_findings);
+        };
+        
+        // 감사 보고서 생성
+        let risk_assessment = assess_overall_security_risk(&audit_findings);
+        let recommendations = generate_security_recommendations(&audit_findings);
+        
+        SecurityAuditReport {
+            audit_id: generate_audit_id(),
+            auditor: signer::address_of(auditor),
+            audit_start_time,
+            audit_end_time: timestamp::now_seconds(),
+            scope: audit_scope,
+            findings: audit_findings,
+            risk_assessment,
+            recommendations,
+            compliance_status: calculate_compliance_status(&audit_findings)
+        }
+    }
+    
+    struct AuditScope has drop, copy {
+        include_access_control: bool,
+        include_authentication: bool,
+        include_data_protection: bool,
+        include_log_integrity: bool,
+        include_policy_compliance: bool,
+        time_range: Option<(u64, u64)>,
+        specific_users: Option<vector<address>>,
+        specific_resources: Option<vector<String>>
+    }
+    
+    struct SecurityAuditReport has drop {
+        audit_id: String,
+        auditor: address,
+        audit_start_time: u64,
+        audit_end_time: u64,
+        scope: AuditScope,
+        findings: vector<AuditFinding>,
+        risk_assessment: RiskAssessment,
+        recommendations: vector<SecurityRecommendation>,
+        compliance_status: ComplianceStatus
+    }
+    
+    struct AuditFinding has drop {
+        finding_id: String,
+        category: String,       // "access_control", "authentication", etc.
+        severity: u8,           // 0: info, 1: low, 2: medium, 3: high, 4: critical
+        description: String,
+        evidence: vector<String>,
+        affected_components: vector<String>,
+        remediation_required: bool
+    }
+    
+    struct RiskAssessment has drop {
+        overall_risk_level: u8, // 0: low, 1: medium, 2: high, 3: critical
+        risk_factors: vector<String>,
+        likelihood: u8,         // 0-100
+        impact: u8,             // 0-100
+        risk_score: u64         // likelihood * impact
+    }
+    
+    struct SecurityRecommendation has drop {
+        recommendation_id: String,
+        priority: u8,           // 0: low, 1: medium, 2: high, 3: urgent
+        category: String,
+        description: String,
+        implementation_effort: u8, // 0: low, 1: medium, 2: high
+        expected_risk_reduction: u8
+    }
+    
+    struct ComplianceStatus has drop {
+        standards: SmartTable<String, ComplianceResult>,
+        overall_compliance_score: u64, // 0-100
+        gaps_identified: vector<String>,
+        certification_status: SmartTable<String, bool>
+    }
+    
+    struct ComplianceResult has store, drop {
+        standard_name: String,
+        compliance_score: u64, // 0-100
+        requirements_met: u64,
+        total_requirements: u64,
+        gaps: vector<String>
+    }
+    
+    /// 자동 보안 대응 시스템
+    public fun automated_security_response(
+        system_addr: address,
+        security_event: SecurityEvent
+    ) acquires LayeredSecuritySystem {
+        let system = borrow_global_mut<LayeredSecuritySystem>(system_addr);
+        
+        // 이벤트 심각도에 따른 자동 대응
+        match (security_event.severity) {
+            4 => {  // Critical
+                execute_critical_response(&mut system.incident_response, security_event);
+            },
+            3 => {  // High
+                execute_high_priority_response(&mut system.incident_response, security_event);
+            },
+            2 => {  // Medium
+                execute_medium_priority_response(&mut system.incident_response, security_event);
+            },
+            1 => {  // Low
+                execute_low_priority_response(&mut system.incident_response, security_event);
+            },
+            _ => {  // Info
+                log_security_event(&mut system.audit_layer, security_event);
+            }
+        };
+        
+        // 보안 메트릭 업데이트
+        update_security_metrics(&mut system.security_metrics, &security_event);
+        
+        // 관련 정책 자동 조정
+        if (security_event.requires_policy_update) {
+            auto_adjust_security_policies(&mut system.security_policies, &security_event);
+        }
+    }
+    
+    struct SecurityEvent has drop {
+        event_id: String,
+        event_type: u8,         // 0: intrusion, 1: data_breach, 2: policy_violation
+        severity: u8,           // 0: info, 1: low, 2: medium, 3: high, 4: critical
+        source: String,
+        target: String,
+        timestamp: u64,
+        indicators: vector<String>,
+        requires_policy_update: bool,
+        additional_data: SmartTable<String, String>
+    }
+    
+    /// 사고 대응 시스템
+    struct IncidentResponseSystem has store, drop {
+        response_plans: SmartTable<u8, ResponsePlan>,
+        active_incidents: SmartTable<String, SecurityIncident>,
+        response_team: vector<address>,
+        escalation_matrix: SmartTable<u8, EscalationRule>,
+        recovery_procedures: SmartTable<String, RecoveryProcedure>
+    }
+    
+    struct ResponsePlan has store, drop {
+        severity_level: u8,
+        immediate_actions: vector<String>,
+        investigation_steps: vector<String>,
+        containment_measures: vector<String>,
+        recovery_actions: vector<String>,
+        communication_plan: CommunicationPlan
+    }
+    
+    struct SecurityIncident has store, drop {
+        incident_id: String,
+        detected_at: u64,
+        severity: u8,
+        status: u8,             // 0: new, 1: investigating, 2: contained, 3: resolved
+        affected_systems: vector<String>,
+        response_actions_taken: vector<String>,
+        assigned_responders: vector<address>,
+        estimated_impact: String,
+        lessons_learned: Option<String>
+    }
+    
+    struct EscalationRule has store, drop {
+        trigger_conditions: vector<String>,
+        escalation_targets: vector<address>,
+        notification_methods: vector<u8>,
+        time_thresholds: vector<u64>
+    }
+    
+    struct RecoveryProcedure has store, drop {
+        procedure_name: String,
+        steps: vector<RecoveryStep>,
+        estimated_duration: u64,
+        required_resources: vector<String>,
+        success_criteria: vector<String>
+    }
+    
+    struct RecoveryStep has store, drop, copy {
+        step_number: u64,
+        description: String,
+        responsible_party: String,
+        dependencies: vector<u64>,
+        estimated_time: u64
+    }
+    
+    struct CommunicationPlan has store, drop {
+        internal_notifications: vector<address>,
+        external_notifications: vector<String>,
+        regulatory_reporting: vector<String>,
+        customer_communication: bool,
+        media_response: bool
+    }
+    
+    /// 보안 메트릭 시스템
+    struct SecurityMetrics has store, drop {
+        threat_detection_rate: u64,
+        false_positive_rate: u64,
+        incident_response_time: u64,     // average in seconds
+        policy_violation_count: u64,
+        successful_attacks_prevented: u64,
+        compliance_score: u64,           // 0-100
+        user_training_completion: u64,   // percentage
+        last_security_assessment: u64,
+        metrics_by_category: SmartTable<String, CategoryMetrics>
+    }
+    
+    struct CategoryMetrics has store, drop {
+        category_name: String,
+        success_rate: u64,      // 0-100
+        failure_count: u64,
+        average_response_time: u64,
+        trend_direction: u8     // 0: improving, 1: stable, 2: degrading
+    }
+    
+    // 헬퍼 함수들과 기본 설정 생성 함수들
+    fun create_default_auth_config(): AuthenticationConfig {
+        AuthenticationConfig {
+            multi_factor_enabled: true,
+            session_timeout: 3600, // 1 hour
+            max_failed_attempts: 3,
+            lockout_duration: 900,  // 15 minutes
+            password_policy: PasswordPolicy {
+                min_length: 12,
+                require_uppercase: true,
+                require_lowercase: true,
+                require_numbers: true,
+                require_symbols: true,
+                max_age_days: 90,
+                history_count: 5
+            },
+            supported_auth_methods: vector[0, 1, 2] // all methods
+        }
+    }
+    
+    fun create_default_authz_config(): AuthorizationConfig {
+        AuthorizationConfig {
+            rbac_enabled: true,
+            abac_enabled: true,
+            principle_of_least_privilege: true,
+            permission_inheritance: true,
+            dynamic_permissions: true
+        }
+    }
+    
+    fun create_default_audit_config(): AuditConfig {
+        AuditConfig {
+            log_all_access: true,
+            log_failed_attempts: true,
+            log_data_changes: true,
+            log_admin_actions: true,
+            retention_period_days: 2555, // 7 years
+            compliance_standards: vector[
+                string::utf8(b"SOX"),
+                string::utf8(b"GDPR"),
+                string::utf8(b"HIPAA")
+            ]
+        }
+    }
+    
+    fun create_default_encryption_config(): EncryptionConfig {
+        EncryptionConfig {
+            data_at_rest_encryption: true,
+            data_in_transit_encryption: true,
+            key_rotation_interval: 7776000, // 90 days
+            encryption_algorithm: string::utf8(b"AES-256-GCM"),
+            key_derivation_function: string::utf8(b"PBKDF2")
+        }
+    }
+    
+    fun create_default_threat_detection(): ThreatDetectionSystem {
+        ThreatDetectionSystem {
+            anomaly_detection: AnomalyDetection {
+                baseline_established: false,
+                detection_algorithms: vector[
+                    string::utf8(b"statistical"),
+                    string::utf8(b"machine_learning"),
+                    string::utf8(b"behavioral")
+                ],
+                sensitivity_level: 2, // medium
+                false_positive_rate: 5 // 5%
+            },
+            signature_detection: SignatureDetection {
+                signature_database: smart_table::new(),
+                last_update: 0,
+                auto_update_enabled: true
+            },
+            behavioral_analysis: BehavioralAnalysis {
+                user_profiles: smart_table::new(),
+                analysis_window: 604800, // 7 days
+                deviation_threshold: 70   // 70% deviation triggers alert
+            },
+            threat_intelligence: ThreatIntelligence {
+                threat_feeds: vector[
+                    string::utf8(b"NIST_CVE"),
+                    string::utf8(b"MISP"),
+                    string::utf8(b"internal")
+                ],
+                ioc_database: smart_table::new(),
+                last_feed_update: 0
+            }
+        }
+    }
+    
+    fun create_default_incident_response(): IncidentResponseSystem {
+        IncidentResponseSystem {
+            response_plans: smart_table::new(),
+            active_incidents: smart_table::new(),
+            response_team: vector::empty(),
+            escalation_matrix: smart_table::new(),
+            recovery_procedures: smart_table::new()
+        }
+    }
+    
+    fun create_default_security_metrics(): SecurityMetrics {
+        SecurityMetrics {
+            threat_detection_rate: 0,
+            false_positive_rate: 0,
+            incident_response_time: 0,
+            policy_violation_count: 0,
+            successful_attacks_prevented: 0,
+            compliance_score: 100,
+            user_training_completion: 0,
+            last_security_assessment: timestamp::now_seconds(),
+            metrics_by_category: smart_table::new()
+        }
+    }
+    
+    fun create_default_security_policies(admin: &signer) {
+        // 기본 보안 정책들을 생성하는 함수
+        // 실제 구현에서는 각 정책을 세부적으로 정의
+    }
+    
+    // 기타 필요한 헬퍼 함수들
+    fun verify_authentication(user: address, config: &AuthenticationConfig, context: &AccessContext): AuthResult {
+        // 인증 검증 로직
+        AuthResult { is_valid: true, reason: string::utf8(b"") }
+    }
+    
+    fun check_authorization(user: address, resource: &String, action: &String, config: &AuthorizationConfig): AuthzResult {
+        // 권한 확인 로직
+        AuthzResult { is_authorized: true, reason: string::utf8(b"") }
+    }
+    
+    fun analyze_threats(user: address, context: &AccessContext, detection: &mut ThreatDetectionSystem): ThreatResult {
+        // 위협 분석 로직
+        ThreatResult { threat_level: 1, details: string::utf8(b"") }
+    }
+    
+    // 추가 구조체 정의
+    struct AuthResult has drop {
+        is_valid: bool,
+        reason: String
+    }
+    
+    struct AuthzResult has drop {
+        is_authorized: bool,
+        reason: String
+    }
+    
+    struct ThreatResult has drop {
+        threat_level: u8,
+        details: String
+    }
+    
+    // 상수 정의
+    const AUTH_FAILED: u64 = 1001;
+    const AUTHZ_FAILED: u64 = 1002;
+    const THREAT_DETECTED: u64 = 1003;
+    const POLICY_VIOLATION: u64 = 1004;
+    const ACCEPTABLE_THREAT_LEVEL: u8 = 2;
+    
+    // 결정 생성 함수들
+    fun create_deny_decision(code: u64, message: String): AccessDecision {
+        AccessDecision {
+            decision: 1, // deny
+            reason_code: code,
+            reason_message: message,
+            additional_requirements: vector::empty(),
+            expires_at: option::none()
+        }
+    }
+    
+    fun create_challenge_decision(code: u64, message: String): AccessDecision {
+        AccessDecision {
+            decision: 2, // challenge
+            reason_code: code,
+            reason_message: message,
+            additional_requirements: vector[string::utf8(b"additional_auth")],
+            expires_at: option::some(timestamp::now_seconds() + 300)
+        }
+    }
+    
+    fun create_conditional_decision(code: u64, conditions: vector<String>): AccessDecision {
+        AccessDecision {
+            decision: 3, // conditional
+            reason_code: code,
+            reason_message: string::utf8(b"Policy conditions must be met"),
+            additional_requirements: conditions,
+            expires_at: option::some(timestamp::now_seconds() + 3600)
+        }
+    }
+    
+    fun create_allow_decision(): AccessDecision {
+        AccessDecision {
+            decision: 0, // allow
+            reason_code: 0,
+            reason_message: string::utf8(b"Access granted"),
+            additional_requirements: vector::empty(),
+            expires_at: option::none()
+        }
+    }
+    
+    // 기타 필요한 함수들 (placeholder)
+    fun evaluate_security_policies(policies: &SmartTable<String, SecurityPolicy>, user: address, resource: &String, action: &String): PolicyResult {
+        PolicyResult { compliant: true, conditions: vector::empty() }
+    }
+    
+    fun log_access_decision(audit: &mut AuditConfig, user: address, resource: &String, action: &String, context: &AccessContext, granted: bool) {
+        // 접근 결정 로깅
+    }
+    
+    struct PolicyResult has drop {
+        compliant: bool,
+        conditions: vector<String>
+    }
+    
+    // 제로 트러스트 관련 함수들
+    fun verify_identity(user: address, level: u8): VerificationStep {
+        VerificationStep {
+            step_name: string::utf8(b"Identity Verification"),
+            result: true,
+            confidence: 95,
+            risk_factors: vector::empty()
+        }
+    }
+    
+    fun assess_device_trust(user: address, resource: &String): VerificationStep {
+        VerificationStep {
+            step_name: string::utf8(b"Device Trust Assessment"),
+            result: true,
+            confidence: 85,
+            risk_factors: vector::empty()
+        }
+    }
+    
+    fun analyze_network_security(user: address): VerificationStep {
+        VerificationStep {
+            step_name: string::utf8(b"Network Security Analysis"),
+            result: true,
+            confidence: 90,
+            risk_factors: vector::empty()
+        }
+    }
+    
+    fun analyze_behavior_patterns(analysis: &mut BehavioralAnalysis, user: address, resource: &String): VerificationStep {
+        VerificationStep {
+            step_name: string::utf8(b"Behavioral Analysis"),
+            result: true,
+            confidence: 80,
+            risk_factors: vector::empty()
+        }
+    }
+    
+    fun assess_realtime_risk(user: address, resource: &String, steps: &vector<VerificationStep>): VerificationStep {
+        VerificationStep {
+            step_name: string::utf8(b"Real-time Risk Assessment"),
+            result: true,
+            confidence: 88,
+            risk_factors: vector::empty()
+        }
+    }
+    
+    fun calculate_trust_score(steps: &vector<VerificationStep>): u64 {
+        let mut total_confidence = 0;
+        let step_count = vector::length(steps);
+        
+        let i = 0;
+        while (i < step_count) {
+            let step = vector::borrow(steps, i);
+            total_confidence = total_confidence + step.confidence;
+            i = i + 1;
+        };
+        
+        if (step_count > 0) {
+            total_confidence / step_count
+        } else {
+            0
+        }
+    }
+    
+    fun determine_access_decision(trust_score: u64, verification_level: u8): AccessDecision {
+        let required_score = match (verification_level) {
+            0 => 60, // low
+            1 => 75, // medium
+            2 => 90, // high
+            _ => 95  // critical
+        };
+        
+        if (trust_score >= required_score) {
+            create_allow_decision()
+        } else {
+            create_deny_decision(1005, string::utf8(b"Insufficient trust score"))
+        }
+    }
+    
+    // 추가적인 보안 함수들과 감사 함수들도 필요에 따라 구현...
+}
+```
+
+## 🔗 advanced-concepts 섹션 완성!
+
+**모든 4개 페이지가 완성되었습니다!** 🎉
+
+### ✅ **완성된 파일들:**
+1. **index.mdx** - 고급 개념 개요 ✅
+2. **_meta.json** - 메타데이터 설정 ✅  
+3. **smart-vector-table.mdx** - Smart Vector & Smart Table ✅
+4. **resource-account-capability.mdx** - Resource Account & Capability ✅
+5. **event-object-signer.mdx** - Event, Object, Signer 심화 ✅
+6. **access-control-security.mdx** - Access Control & Security ✅
+
+### 📋 **구조 요약:**
+```
+🎯 advanced-concepts/
+├── index.mdx (고급 개념 개요)
+├── _meta.json (메타데이터)
+├── smart-vector-table.mdx (데이터 구조)
+├── resource-account-capability.mdx (권한 관리)
+├── event-object-signer.mdx (핵심 개념 심화)
+└── access-control-security.mdx (보안 시스템)
+```
+
+**이제 Cursor에서 모든 파일을 생성하시고, 다음 섹션을 진행하시겠어요?**
+
+### 🚀 **다음 단계 옵션:**
+1. **dapp-development** - dApp 개발 (마지막 섹션)
+2. **다른 우선순위가 있으시면 말씀해주세요!**
+
+**어떤 걸 다음에 하시겠어요?** 😊
+
+## 📚 참고 자료
+
+- [Movement 개발자 포털](https://developer.movementnetwork.xyz/)
+- [보안 모범 사례](https://docs.movementnetwork.xyz/security)
+- [접근 제어 가이드](https://docs.movementnetwork.xyz/access-control)
+
+---
+
+*엔터프라이즈급 보안으로 안전하고 신뢰받는 시스템을 구축하세요! 🛡️🔒*

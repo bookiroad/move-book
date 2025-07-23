@@ -1,0 +1,697 @@
+# 📊 Smart Vector & Smart Table
+
+Move 언어의 고급 데이터 구조인 Smart Vector와 Smart Table을 심층적으로 다룹니다. 효율적인 데이터 관리와 가스 최적화를 위한 고급 패턴들을 학습합니다.
+
+## 🎯 학습 목표
+
+이 섹션을 완료하면:
+- Smart Vector의 고급 활용 패턴을 구현할 수 있습니다
+- Smart Table을 이용한 효율적인 데이터 매핑을 설계할 수 있습니다
+- 가스 효율적인 데이터 구조를 선택하고 최적화할 수 있습니다
+- 대용량 데이터 처리를 위한 배치 연산을 구현할 수 있습니다
+
+## 📋 Smart Vector 심화
+
+### Vector vs Smart Vector 비교
+```move
+// 기본 Vector (단순)
+module basic_example {
+    use std::vector;
+    
+    struct SimpleList has key {
+        items: vector<u64>
+    }
+    
+    // 문제: 가스 비용이 높음, 검색 비효율
+    public fun find_item(list: &SimpleList, target: u64): bool {
+        vector::contains(&list.items, &target)  // O(n) 검색
+    }
+}
+
+// Smart Vector (최적화)
+module advanced_example {
+    use std::vector;
+    use aptos_std::smart_vector::{Self, SmartVector};
+    
+    struct OptimizedList has key {
+        items: SmartVector<u64>,
+        sorted: bool,
+        index_map: SmartVector<u64>  // 인덱스 매핑
+    }
+    
+    // 장점: 효율적 메모리 사용, 빠른 접근
+    public fun binary_search(list: &OptimizedList, target: u64): bool {
+        if (list.sorted) {
+            binary_search_impl(&list.items, target)  // O(log n) 검색
+        } else {
+            smart_vector::contains(&list.items, &target)
+        }
+    }
+}
+```
+
+### Smart Vector 고급 패턴
+
+#### 1. 동적 크기 조절과 메모리 최적화
+```move
+module dynamic_vector {
+    use aptos_std::smart_vector::{Self, SmartVector};
+    use std::option::{Self, Option};
+    
+    /// 동적으로 크기가 변하는 스마트 벡터
+    struct DynamicContainer<T: store> has key {
+        data: SmartVector<T>,
+        capacity: u64,
+        auto_resize: bool,
+        growth_factor: u64  // 성장 비율 (예: 150 = 1.5배)
+    }
+    
+    /// 컨테이너 초기화
+    public fun create<T: store>(
+        initial_capacity: u64,
+        auto_resize: bool,
+        growth_factor: u64
+    ): DynamicContainer<T> {
+        DynamicContainer {
+            data: smart_vector::new(),
+            capacity: initial_capacity,
+            auto_resize,
+            growth_factor
+        }
+    }
+    
+    /// 스마트 추가 (자동 리사이징)
+    public fun smart_push_back<T: store>(
+        container: &mut DynamicContainer<T>,
+        item: T
+    ) {
+        let current_size = smart_vector::length(&container.data);
+        
+        // 용량 확인 및 자동 확장
+        if (current_size >= container.capacity && container.auto_resize) {
+            container.capacity = (container.capacity * container.growth_factor) / 100;
+        };
+        
+        smart_vector::push_back(&mut container.data, item);
+    }
+    
+    /// 배치 추가 (가스 효율적)
+    public fun batch_push<T: store>(
+        container: &mut DynamicContainer<T>,
+        items: vector<T>
+    ) {
+        let items_len = vector::length(&items);
+        let current_size = smart_vector::length(&container.data);
+        
+        // 필요 용량 미리 계산
+        if (current_size + items_len > container.capacity) {
+            let new_capacity = current_size + items_len;
+            new_capacity = (new_capacity * container.growth_factor) / 100;
+            container.capacity = new_capacity;
+        };
+        
+        // 배치로 추가 (가스 절약)
+        while (!vector::is_empty(&items)) {
+            let item = vector::pop_back(&mut items);
+            smart_vector::push_back(&mut container.data, item);
+        };
+        
+        vector::destroy_empty(items);
+    }
+    
+    /// 조건부 제거 (필터링)
+    public fun filter_remove<T: store + drop + copy>(
+        container: &mut DynamicContainer<T>,
+        predicate: |&T|bool
+    ): vector<T> {
+        let removed_items = vector::empty();
+        let i = 0;
+        let len = smart_vector::length(&container.data);
+        
+        while (i < len) {
+            let item = smart_vector::borrow(&container.data, i);
+            if (predicate(item)) {
+                let removed = smart_vector::swap_remove(&mut container.data, i);
+                vector::push_back(&mut removed_items, removed);
+                len = len - 1;  // 길이 감소
+            } else {
+                i = i + 1;
+            }
+        };
+        
+        removed_items
+    }
+}
+```
+
+#### 2. 정렬 및 검색 최적화
+```move
+module sorted_vector {
+    use aptos_std::smart_vector::{Self, SmartVector};
+    use std::vector;
+    
+    /// 정렬된 스마트 벡터
+    struct SortedSmartVector<T: store + copy + drop> has key {
+        data: SmartVector<T>,
+        comparator: u8,  // 0: ascending, 1: descending
+        allow_duplicates: bool
+    }
+    
+    /// 이진 탐색으로 삽입 위치 찾기
+    fun find_insert_position<T: store + copy + drop>(
+        vec: &SmartVector<T>,
+        item: &T,
+        ascending: bool
+    ): u64 {
+        let len = smart_vector::length(vec);
+        if (len == 0) return 0;
+        
+        let left = 0;
+        let right = len;
+        
+        while (left < right) {
+            let mid = (left + right) / 2;
+            let mid_item = smart_vector::borrow(vec, mid);
+            
+            let should_go_right = if (ascending) {
+                compare_items(mid_item, item) <= 0
+            } else {
+                compare_items(mid_item, item) >= 0
+            };
+            
+            if (should_go_right) {
+                left = mid + 1;
+            } else {
+                right = mid;
+            }
+        };
+        
+        left
+    }
+    
+    /// 정렬 상태 유지하며 삽입
+    public fun sorted_insert<T: store + copy + drop>(
+        sorted_vec: &mut SortedSmartVector<T>,
+        item: T
+    ): bool {
+        let position = find_insert_position(
+            &sorted_vec.data,
+            &item,
+            sorted_vec.comparator == 0
+        );
+        
+        // 중복 체크
+        if (!sorted_vec.allow_duplicates && position > 0) {
+            let existing = smart_vector::borrow(&sorted_vec.data, position - 1);
+            if (compare_items(existing, &item) == 0) {
+                return false  // 중복이므로 삽입하지 않음
+            }
+        };
+        
+        smart_vector::insert(&mut sorted_vec.data, position, item);
+        true
+    }
+    
+    /// 이진 탐색
+    public fun binary_search<T: store + copy + drop>(
+        sorted_vec: &SortedSmartVector<T>,
+        target: &T
+    ): Option<u64> {
+        let len = smart_vector::length(&sorted_vec.data);
+        if (len == 0) return option::none();
+        
+        let left = 0;
+        let right = len - 1;
+        
+        while (left <= right) {
+            let mid = (left + right) / 2;
+            let mid_item = smart_vector::borrow(&sorted_vec.data, mid);
+            let cmp = compare_items(mid_item, target);
+            
+            if (cmp == 0) {
+                return option::some(mid)
+            } else if (cmp < 0) {
+                left = mid + 1;
+            } else {
+                right = mid - 1;
+            }
+        };
+        
+        option::none()
+    }
+    
+    /// 범위 검색 (두 값 사이의 모든 항목)
+    public fun range_search<T: store + copy + drop>(
+        sorted_vec: &SortedSmartVector<T>,
+        start: &T,
+        end: &T
+    ): vector<T> {
+        let result = vector::empty();
+        let len = smart_vector::length(&sorted_vec.data);
+        let i = 0;
+        
+        while (i < len) {
+            let item = smart_vector::borrow(&sorted_vec.data, i);
+            let cmp_start = compare_items(item, start);
+            let cmp_end = compare_items(item, end);
+            
+            if (cmp_start >= 0 && cmp_end <= 0) {
+                vector::push_back(&mut result, *item);
+            };
+            
+            i = i + 1;
+        };
+        
+        result
+    }
+    
+    // 비교 함수 (실제 구현에서는 제네릭 비교 로직 필요)
+    fun compare_items<T>(a: &T, b: &T): u8 {
+        // 실제 구현에서는 T 타입에 따른 비교 로직
+        0  // placeholder
+    }
+}
+```
+
+## 🗃️ Smart Table 심화
+
+### Smart Table 고급 활용
+```move
+module advanced_table {
+    use aptos_std::smart_table::{Self, SmartTable};
+    use std::string::{Self, String};
+    use std::vector;
+    use std::option::{Self, Option};
+    
+    /// 고급 사용자 레지스트리
+    struct UserRegistry has key {
+        // 기본 매핑: 주소 -> 사용자 정보
+        users: SmartTable<address, UserInfo>,
+        
+        // 보조 인덱스들
+        username_to_address: SmartTable<String, address>,
+        email_to_address: SmartTable<String, address>,
+        
+        // 통계 정보
+        total_users: u64,
+        active_users: u64,
+        
+        // 설정
+        max_users: Option<u64>,
+        require_email_verification: bool
+    }
+    
+    struct UserInfo has store, copy, drop {
+        username: String,
+        email: String,
+        is_active: bool,
+        registration_time: u64,
+        last_login: u64,
+        metadata: SmartTable<String, String>  // 확장 가능한 메타데이터
+    }
+    
+    /// 레지스트리 초기화
+    public fun initialize_registry(
+        admin: &signer,
+        max_users: Option<u64>,
+        require_email_verification: bool
+    ) {
+        move_to(admin, UserRegistry {
+            users: smart_table::new(),
+            username_to_address: smart_table::new(),
+            email_to_address: smart_table::new(),
+            total_users: 0,
+            active_users: 0,
+            max_users,
+            require_email_verification
+        });
+    }
+    
+    /// 사용자 등록 (트랜잭션 안전성 보장)
+    public fun register_user(
+        user: &signer,
+        registry_addr: address,
+        username: String,
+        email: String
+    ) acquires UserRegistry {
+        let user_addr = signer::address_of(user);
+        let registry = borrow_global_mut<UserRegistry>(registry_addr);
+        
+        // 용량 제한 확인
+        if (option::is_some(&registry.max_users)) {
+            let max = *option::borrow(&registry.max_users);
+            assert!(registry.total_users < max, E_REGISTRY_FULL);
+        };
+        
+        // 중복 확인 (원자적 체크)
+        assert!(!smart_table::contains(&registry.users, user_addr), E_USER_EXISTS);
+        assert!(!smart_table::contains(&registry.username_to_address, username), E_USERNAME_TAKEN);
+        assert!(!smart_table::contains(&registry.email_to_address, email), E_EMAIL_TAKEN);
+        
+        // 사용자 정보 생성
+        let user_info = UserInfo {
+            username,
+            email,
+            is_active: !registry.require_email_verification,
+            registration_time: timestamp::now_seconds(),
+            last_login: 0,
+            metadata: smart_table::new()
+        };
+        
+        // 모든 테이블에 원자적으로 추가
+        smart_table::add(&mut registry.users, user_addr, user_info);
+        smart_table::add(&mut registry.username_to_address, username, user_addr);
+        smart_table::add(&mut registry.email_to_address, email, user_addr);
+        
+        // 통계 업데이트
+        registry.total_users = registry.total_users + 1;
+        if (!registry.require_email_verification) {
+            registry.active_users = registry.active_users + 1;
+        };
+    }
+    
+    /// 배치 사용자 조회 (가스 효율적)
+    public fun batch_get_users(
+        registry_addr: address,
+        addresses: vector<address>
+    ): vector<Option<UserInfo>> acquires UserRegistry {
+        let registry = borrow_global<UserRegistry>(registry_addr);
+        let results = vector::empty();
+        
+        let i = 0;
+        let len = vector::length(&addresses);
+        
+        while (i < len) {
+            let addr = *vector::borrow(&addresses, i);
+            let user_info = if (smart_table::contains(&registry.users, addr)) {
+                option::some(*smart_table::borrow(&registry.users, addr))
+            } else {
+                option::none()
+            };
+            
+            vector::push_back(&mut results, user_info);
+            i = i + 1;
+        };
+        
+        results
+    }
+    
+    /// 조건부 사용자 검색
+    public fun find_users_by_criteria(
+        registry_addr: address,
+        active_only: bool,
+        min_registration_time: Option<u64>,
+        max_registration_time: Option<u64>
+    ): vector<address> acquires UserRegistry {
+        let registry = borrow_global<UserRegistry>(registry_addr);
+        let results = vector::empty();
+        
+        // SmartTable 반복 (내부적으로 최적화됨)
+        smart_table::for_each_ref(&registry.users, |addr, user_info| {
+            let matches = true;
+            
+            // 활성 상태 필터
+            if (active_only && !user_info.is_active) {
+                matches = false;
+            };
+            
+            // 등록 시간 범위 필터
+            if (matches && option::is_some(&min_registration_time)) {
+                let min_time = *option::borrow(&min_registration_time);
+                if (user_info.registration_time < min_time) {
+                    matches = false;
+                }
+            };
+            
+            if (matches && option::is_some(&max_registration_time)) {
+                let max_time = *option::borrow(&max_registration_time);
+                if (user_info.registration_time > max_time) {
+                    matches = false;
+                }
+            };
+            
+            if (matches) {
+                vector::push_back(&mut results, *addr);
+            }
+        });
+        
+        results
+    }
+    
+    /// 사용자 메타데이터 관리
+    public fun set_user_metadata(
+        user: &signer,
+        registry_addr: address,
+        key: String,
+        value: String
+    ) acquires UserRegistry {
+        let user_addr = signer::address_of(user);
+        let registry = borrow_global_mut<UserRegistry>(registry_addr);
+        
+        assert!(smart_table::contains(&registry.users, user_addr), E_USER_NOT_FOUND);
+        
+        let user_info = smart_table::borrow_mut(&mut registry.users, user_addr);
+        
+        if (smart_table::contains(&user_info.metadata, key)) {
+            *smart_table::borrow_mut(&mut user_info.metadata, key) = value;
+        } else {
+            smart_table::add(&mut user_info.metadata, key, value);
+        }
+    }
+    
+    /// 통계 정보 조회
+    public fun get_registry_stats(registry_addr: address): (u64, u64, u64) acquires UserRegistry {
+        let registry = borrow_global<UserRegistry>(registry_addr);
+        (
+            registry.total_users,
+            registry.active_users,
+            smart_table::length(&registry.users)  // 실제 테이블 크기
+        )
+    }
+}
+```
+
+## ⚡ 성능 최적화 패턴
+
+### 가스 효율적인 데이터 구조 선택
+```move
+module performance_patterns {
+    use aptos_std::smart_vector::{Self, SmartVector};
+    use aptos_std::smart_table::{Self, SmartTable};
+    use std::vector;
+    
+    /// 데이터 크기에 따른 최적 구조 선택
+    struct AdaptiveDataStructure<T: store> has key {
+        small_data: vector<T>,           // < 100 items
+        medium_data: SmartVector<T>,     // 100-10000 items  
+        large_data: SmartTable<u64, T>,  // > 10000 items
+        current_mode: u8,  // 0: small, 1: medium, 2: large
+        size: u64
+    }
+    
+    const SMALL_THRESHOLD: u64 = 100;
+    const LARGE_THRESHOLD: u64 = 10000;
+    
+    /// 데이터 추가 시 자동 구조 전환
+    public fun adaptive_add<T: store + copy + drop>(
+        container: &mut AdaptiveDataStructure<T>,
+        item: T
+    ) {
+        container.size = container.size + 1;
+        
+        // 구조 전환 필요성 체크
+        if (container.current_mode == 0 && container.size >= SMALL_THRESHOLD) {
+            migrate_to_medium(container);
+            container.current_mode = 1;
+        } else if (container.current_mode == 1 && container.size >= LARGE_THRESHOLD) {
+            migrate_to_large(container);
+            container.current_mode = 2;
+        };
+        
+        // 현재 모드에 따라 추가
+        if (container.current_mode == 0) {
+            vector::push_back(&mut container.small_data, item);
+        } else if (container.current_mode == 1) {
+            smart_vector::push_back(&mut container.medium_data, item);
+        } else {
+            smart_table::add(&mut container.large_data, container.size - 1, item);
+        }
+    }
+    
+    /// 배치 연산 최적화
+    public fun batch_operations<T: store + copy + drop>(
+        container: &mut AdaptiveDataStructure<T>,
+        operations: vector<BatchOperation<T>>
+    ) {
+        // 연산들을 타입별로 그룹화
+        let adds = vector::empty();
+        let removes = vector::empty();
+        let updates = vector::empty();
+        
+        while (!vector::is_empty(&operations)) {
+            let op = vector::pop_back(&mut operations);
+            match (op.op_type) {
+                0 => vector::push_back(&mut adds, op),
+                1 => vector::push_back(&mut removes, op),
+                2 => vector::push_back(&mut updates, op),
+                _ => {} // 무시
+            }
+        };
+        
+        // 배치로 실행 (가스 효율성)
+        batch_add_items(container, adds);
+        batch_remove_items(container, removes);
+        batch_update_items(container, updates);
+    }
+    
+    struct BatchOperation<T: store> has drop {
+        op_type: u8,  // 0: add, 1: remove, 2: update
+        index: Option<u64>,
+        item: Option<T>
+    }
+    
+    fun migrate_to_medium<T: store + copy + drop>(
+        container: &mut AdaptiveDataStructure<T>
+    ) {
+        // vector에서 SmartVector로 데이터 이전
+        while (!vector::is_empty(&container.small_data)) {
+            let item = vector::pop_back(&mut container.small_data);
+            smart_vector::push_back(&mut container.medium_data, item);
+        }
+    }
+    
+    fun migrate_to_large<T: store + copy + drop>(
+        container: &mut AdaptiveDataStructure<T>
+    ) {
+        // SmartVector에서 SmartTable로 데이터 이전
+        let i = 0;
+        let len = smart_vector::length(&container.medium_data);
+        
+        while (i < len) {
+            let item = *smart_vector::borrow(&container.medium_data, i);
+            smart_table::add(&mut container.large_data, i, item);
+            i = i + 1;
+        };
+        
+        // SmartVector 정리
+        smart_vector::clear(&mut container.medium_data);
+    }
+}
+```
+
+### 메모리 효율적인 패턴
+```move
+module memory_optimization {
+    use aptos_std::smart_table::{Self, SmartTable};
+    use std::option::{Self, Option};
+    use std::string::String;
+    
+    /// 메모리 풀 패턴 (객체 재사용)
+    struct ObjectPool<T: store> has key {
+        available: SmartVector<T>,
+        in_use: SmartTable<u64, T>,
+        next_id: u64,
+        max_pool_size: u64
+    }
+    
+    /// 객체 대여 (메모리 재사용)
+    public fun borrow_object<T: store>(
+        pool: &mut ObjectPool<T>
+    ): (u64, Option<T>) {
+        let id = pool.next_id;
+        pool.next_id = pool.next_id + 1;
+        
+        // 재사용 가능한 객체가 있으면 사용
+        if (smart_vector::length(&pool.available) > 0) {
+            let obj = smart_vector::pop_back(&mut pool.available);
+            smart_table::add(&mut pool.in_use, id, obj);
+            (id, option::none())  // 재사용된 객체는 반환하지 않음
+        } else {
+            // 새 객체 필요
+            (id, option::some(create_new_object()))
+        }
+    }
+    
+    /// 객체 반납 (풀로 복귀)
+    public fun return_object<T: store>(
+        pool: &mut ObjectPool<T>,
+        id: u64
+    ) {
+        if (smart_table::contains(&pool.in_use, id)) {
+            let obj = smart_table::remove(&mut pool.in_use, id);
+            
+            // 풀 크기 제한 확인
+            if (smart_vector::length(&pool.available) < pool.max_pool_size) {
+                reset_object(&mut obj);  // 객체 초기화
+                smart_vector::push_back(&mut pool.available, obj);
+            }
+            // 풀이 가득 찬 경우 객체는 자동으로 drop됨
+        }
+    }
+    
+    /// 지연 로딩 패턴 (필요할 때만 로드)
+    struct LazyLoadedData<T: store> has key {
+        data: SmartTable<String, T>,
+        loaded_keys: SmartVector<String>,
+        loader_function: String,  // 로더 함수 식별자
+        max_cache_size: u64
+    }
+    
+    /// 지연 로딩으로 데이터 조회
+    public fun get_lazy<T: store + copy>(
+        lazy_data: &mut LazyLoadedData<T>,
+        key: String
+    ): T {
+        // 이미 로드된 경우 반환
+        if (smart_table::contains(&lazy_data.data, key)) {
+            return *smart_table::borrow(&lazy_data.data, key)
+        };
+        
+        // 데이터 로드 (실제로는 외부 함수 호출)
+        let loaded_data = load_data_by_key<T>(key, lazy_data.loader_function);
+        
+        // 캐시 크기 관리 (LRU 제거)
+        if (smart_vector::length(&lazy_data.loaded_keys) >= lazy_data.max_cache_size) {
+            let oldest_key = smart_vector::remove(&mut lazy_data.loaded_keys, 0);
+            smart_table::remove(&mut lazy_data.data, oldest_key);
+        };
+        
+        // 새 데이터 캐시에 추가
+        smart_table::add(&mut lazy_data.data, key, loaded_data);
+        smart_vector::push_back(&mut lazy_data.loaded_keys, key);
+        
+        loaded_data
+    }
+    
+    // 헬퍼 함수들
+    fun create_new_object<T: store>(): T {
+        // 새 객체 생성 로직
+        abort 0  // placeholder
+    }
+    
+    fun reset_object<T: store>(obj: &mut T) {
+        // 객체 초기화 로직
+    }
+    
+    fun load_data_by_key<T: store>(key: String, loader: String): T {
+        // 외부에서 데이터 로드
+        abort 0  // placeholder
+    }
+}
+```
+
+## 🔗 다음 단계
+
+Smart Vector와 Smart Table을 마스터했다면:
+
+**[Resource Account & Capability →](/advanced-concepts/resource-account-capability)**
+
+## 📚 참고 자료
+
+- [Movement 개발자 포털](https://developer.movementnetwork.xyz/)
+- [Smart Table API 문서](https://docs.movementnetwork.xyz/api/smart-table)
+- [성능 최적화 가이드](https://docs.movementnetwork.xyz/performance)
+
+---
+
+*효율적인 데이터 구조로 고성능 dApp을 구축하세요! 📊⚡*

@@ -1,0 +1,1754 @@
+# 🏛️ 거버넌스 및 DAO 시스템
+
+Movement Network에서 탈중앙화 자율 조직과 거버넌스 시스템을 구축하는 완전한 가이드입니다. 토큰 기반 투표부터 복잡한 제안 실행까지, 투명하고 효율적인 DAO를 만들어봅니다.
+
+## 🎯 학습 목표
+
+이 섹션을 완료하면:
+- 종합적인 DAO 거버넌스 시스템을 구축할 수 있습니다
+- 위임 투표와 쿼드라틱 투표를 구현할 수 있습니다
+- 타임락과 멀티시그 보안을 설계할 수 있습니다
+- 토큰 경제학과 인센티브를 최적화할 수 있습니다
+- 제안 실행과 업그레이드 메커니즘을 개발할 수 있습니다
+
+## 🏛️ 종합 DAO 거버넌스 시스템
+
+### 고급 DAO 아키텍처
+```move
+module governance::comprehensive_dao {
+    use std::signer;
+    use std::string::{Self, String};
+    use std::vector;
+    use std::option::{Self, Option};
+    use aptos_framework::fungible_asset::{Self, FungibleAsset, Metadata};
+    use aptos_framework::primary_fungible_store;
+    use aptos_framework::object::{Self, Object};
+    use aptos_framework::timestamp;
+    use aptos_framework::event::{Self, EventHandle};
+    use aptos_std::smart_table::{Self, SmartTable};
+    use aptos_std::math64;
+    use aptos_std::hash;
+    
+    /// DAO 거버넌스 시스템
+    struct DAOGovernance has key {
+        // DAO 기본 정보
+        name: String,
+        description: String,
+        governance_token: Object<Metadata>,
+        
+        // 투표 설정
+        voting_config: VotingConfiguration,
+        
+        // 제안 관리
+        proposals: SmartTable<u64, Proposal>,
+        proposal_count: u64,
+        
+        // 위임 시스템
+        delegations: SmartTable<address, Delegation>,
+        delegates: SmartTable<address, DelegateProfile>,
+        
+        // 쿼럼 및 임계값
+        quorum_threshold: u64,           // basis points (최소 참여율)
+        approval_threshold: u64,         // basis points (찬성 비율)
+        
+        // 타임락 및 실행
+        timelock_delay: u64,             // 실행 지연 시간 (초)
+        execution_window: u64,           // 실행 가능 기간 (초)
+        
+        // 멀티시그 보안
+        multisig_threshold: u8,          // 최소 서명 수
+        multisig_signers: vector<address>,
+        
+        // 토큰 스테이킹
+        staking_requirement: u64,        // 제안 생성 시 필요한 최소 스테이킹
+        total_staked: u64,
+        user_stakes: SmartTable<address, UserStake>,
+        
+        // 보상 시스템
+        participation_rewards_enabled: bool,
+        reward_pool: u64,
+        rewards_per_vote: u64,
+        
+        // 고급 투표 메커니즘
+        quadratic_voting_enabled: bool,
+        conviction_voting_enabled: bool,
+        
+        // 위원회 시스템
+        committees: SmartTable<String, Committee>,
+        
+        // 거버넌스 통계
+        total_proposals: u64,
+        total_votes_cast: u64,
+        average_participation_rate: u64,
+        
+        // 이벤트
+        governance_events: EventHandle<GovernanceEvent>,
+        
+        // DAO 설정
+        is_active: bool,
+        emergency_pause: bool,
+        guardian_council: Option<address>,
+        
+        created_at: u64,
+        last_updated: u64
+    }
+    
+    /// 투표 설정
+    struct VotingConfiguration has store, drop, copy {
+        // 투표 기간
+        voting_period: u64,              // 투표 기간 (초)
+        voting_delay: u64,               // 제안 후 투표 시작까지 지연 (초)
+        
+        // 스냅샷 설정
+        snapshot_strategy: u8,           // 0: current, 1: fixed_block, 2: time_weighted
+        snapshot_block_delay: u64,       // 스냅샷 블록 지연
+        
+        // 투표 가중치
+        vote_weight_strategy: u8,        // 0: token_balance, 1: staked_balance, 2: time_weighted
+        minimum_vote_weight: u64,        // 최소 투표 가중치
+        
+        // 조기 종료
+        early_execution_enabled: bool,
+        early_execution_threshold: u64,  // basis points
+        
+        // 익명 투표
+        secret_voting_enabled: bool
+    }
+    
+    /// 제안
+    struct Proposal has store, drop, copy {
+        id: u64,
+        proposer: address,
+        
+        // 제안 내용
+        title: String,
+        description: String,
+        proposal_type: u8,               // 0: parameter, 1: upgrade, 2: spending, 3: general
+        
+        // 실행 데이터
+        execution_data: vector<ExecutionAction>,
+        
+        // 투표 정보
+        votes_for: u64,
+        votes_against: u64,
+        votes_abstain: u64,
+        total_votes: u64,
+        
+        // 투표자 추적
+        voters: SmartTable<address, Vote>,
+        
+        // 쿼드라틱 투표 (선택적)
+        quadratic_votes_for: u64,
+        quadratic_votes_against: u64,
+        
+        // 시간 정보
+        created_at: u64,
+        voting_starts_at: u64,
+        voting_ends_at: u64,
+        execution_eta: u64,              // 실행 예정 시간
+        
+        // 상태
+        status: u8,                      // 0: pending, 1: active, 2: succeeded, 3: defeated, 4: executed, 5: expired
+        
+        // 스테이킹
+        proposer_stake: u64,
+        total_stake_for: u64,
+        total_stake_against: u64,
+        
+        // 위원회 정보 (해당하는 경우)
+        committee: Option<String>,
+        
+        // 메타데이터
+        ipfs_hash: Option<String>,       // 상세 정보 IPFS 해시
+        tags: vector<String>
+    }
+    
+    /// 실행 액션
+    struct ExecutionAction has store, drop, copy {
+        target: address,                 // 대상 컨트랙트
+        function_name: String,           // 호출할 함수
+        args: vector<u8>,               // 함수 인자들
+        value: u64                      // 전송할 토큰 양 (해당하는 경우)
+    }
+    
+    /// 투표
+    struct Vote has store, drop, copy {
+        voter: address,
+        support: u8,                     // 0: against, 1: for, 2: abstain
+        weight: u64,                     // 투표 가중치
+        quadratic_weight: u64,           // 쿼드라틱 가중치
+        reason: String,                  // 투표 이유
+        voted_at: u64
+    }
+    
+    /// 위임
+    struct Delegation has store, drop, copy {
+        delegator: address,
+        delegate: address,
+        delegation_amount: u64,          // 위임된 토큰 양
+        delegation_type: u8,             // 0: full, 1: specific_proposals, 2: committee_only
+        expiry: u64,                     // 위임 만료 시간
+        created_at: u64
+    }
+    
+    /// 대리인 프로필
+    struct DelegateProfile has store, drop, copy {
+        delegate: address,
+        name: String,
+        description: String,
+        platform_url: Option<String>,
+        
+        // 통계
+        total_delegated: u64,
+        delegator_count: u64,
+        proposals_voted: u64,
+        participation_rate: u64,         // basis points
+        
+        // 전문 분야
+        expertise_areas: vector<String>,
+        
+        // 검증
+        verified: bool,
+        verification_date: u64,
+        
+        created_at: u64,
+        last_activity: u64
+    }
+    
+    /// 사용자 스테이킹
+    struct UserStake has store, drop, copy {
+        user: address,
+        staked_amount: u64,
+        locked_until: u64,
+        
+        // 투표 기록
+        proposals_voted: vector<u64>,
+        participation_score: u64,
+        
+        // 보상
+        unclaimed_rewards: u64,
+        last_reward_claim: u64,
+        
+        // 슬래싱 정보
+        slashed_amount: u64,
+        last_slash_reason: String,
+        
+        created_at: u64
+    }
+    
+    /// 위원회
+    struct Committee has store, drop, copy {
+        name: String,
+        description: String,
+        
+        // 멤버십
+        members: vector<address>,
+        member_limit: u8,
+        
+        // 권한
+        proposal_threshold: u64,         // 위원회 제안 생성 임계값
+        voting_period: u64,              // 위원회 투표 기간
+        
+        // 전문 분야
+        focus_areas: vector<String>,
+        
+        // 활동 통계
+        proposals_reviewed: u64,
+        decisions_made: u64,
+        
+        is_active: bool,
+        created_at: u64
+    }
+    
+    /// 거버넌스 이벤트
+    struct GovernanceEvent has drop, store {
+        event_type: String,
+        user: address,
+        proposal_id: Option<u64>,
+        additional_data: String,
+        timestamp: u64
+    }
+    
+    /// DAO 거버넌스 시스템 초기화
+    public fun initialize_dao_governance(
+        admin: &signer,
+        name: String,
+        description: String,
+        governance_token: Object<Metadata>,
+        voting_period: u64,
+        quorum_threshold: u64,
+        approval_threshold: u64
+    ) {
+        let admin_addr = signer::address_of(admin);
+        
+        // 입력 검증
+        assert!(quorum_threshold > 0 && quorum_threshold <= 10000, E_INVALID_QUORUM);
+        assert!(approval_threshold > 5000 && approval_threshold <= 10000, E_INVALID_THRESHOLD);
+        assert!(voting_period >= 86400, E_INVALID_VOTING_PERIOD); // 최소 1일
+        
+        let voting_config = VotingConfiguration {
+            voting_period,
+            voting_delay: 86400,         // 1일 지연
+            snapshot_strategy: 0,        // 현재 잔액
+            snapshot_block_delay: 1,
+            vote_weight_strategy: 0,     // 토큰 잔액 기반
+            minimum_vote_weight: 1,
+            early_execution_enabled: true,
+            early_execution_threshold: 8000, // 80%
+            secret_voting_enabled: false
+        };
+        
+        let dao = DAOGovernance {
+            name,
+            description,
+            governance_token,
+            voting_config,
+            proposals: smart_table::new(),
+            proposal_count: 0,
+            delegations: smart_table::new(),
+            delegates: smart_table::new(),
+            quorum_threshold,
+            approval_threshold,
+            timelock_delay: 172800,      // 2일
+            execution_window: 259200,    // 3일
+            multisig_threshold: 3,
+            multisig_signers: vector::empty(),
+            staking_requirement: 10000,  // 최소 스테이킹 요구량
+            total_staked: 0,
+            user_stakes: smart_table::new(),
+            participation_rewards_enabled: true,
+            reward_pool: 0,
+            rewards_per_vote: 10,
+            quadratic_voting_enabled: false,
+            conviction_voting_enabled: false,
+            committees: smart_table::new(),
+            total_proposals: 0,
+            total_votes_cast: 0,
+            average_participation_rate: 0,
+            governance_events: account::new_event_handle<GovernanceEvent>(admin),
+            is_active: true,
+            emergency_pause: false,
+            guardian_council: option::some(admin_addr),
+            created_at: timestamp::now_seconds(),
+            last_updated: timestamp::now_seconds()
+        };
+        
+        // 초기 멀티시그 서명자 설정
+        vector::push_back(&mut dao.multisig_signers, admin_addr);
+        
+        move_to(admin, dao);
+    }
+    
+    /// 거버넌스 토큰 스테이킹
+    public fun stake_governance_tokens(
+        user: &signer,
+        dao_addr: address,
+        amount: u64,
+        lock_period: u64
+    ) acquires DAOGovernance {
+        let user_addr = signer::address_of(user);
+        let dao = borrow_global_mut<DAOGovernance>(dao_addr);
+        
+        assert!(dao.is_active && !dao.emergency_pause, E_DAO_PAUSED);
+        assert!(amount > 0, E_INVALID_AMOUNT);
+        
+        // 토큰 전송
+        let gov_fa = primary_fungible_store::withdraw(user, dao.governance_token, amount);
+        primary_fungible_store::deposit(dao_addr, gov_fa);
+        
+        let current_time = timestamp::now_seconds();
+        let lock_until = current_time + lock_period;
+        
+        // 사용자 스테이크 정보 업데이트
+        if (smart_table::contains(&dao.user_stakes, user_addr)) {
+            let user_stake = smart_table::borrow_mut(&mut dao.user_stakes, user_addr);
+            user_stake.staked_amount = user_stake.staked_amount + amount;
+            if (lock_until > user_stake.locked_until) {
+                user_stake.locked_until = lock_until;
+            }
+        } else {
+            let new_stake = UserStake {
+                user: user_addr,
+                staked_amount: amount,
+                locked_until: lock_until,
+                proposals_voted: vector::empty(),
+                participation_score: 0,
+                unclaimed_rewards: 0,
+                last_reward_claim: current_time,
+                slashed_amount: 0,
+                last_slash_reason: string::utf8(b""),
+                created_at: current_time
+            };
+            smart_table::add(&mut dao.user_stakes, user_addr, new_stake);
+        };
+        
+        dao.total_staked = dao.total_staked + amount;
+        
+        // 이벤트 발생
+        event::emit_event(&mut dao.governance_events, GovernanceEvent {
+            event_type: string::utf8(b"stake"),
+            user: user_addr,
+            proposal_id: option::none(),
+            additional_data: amount.to_string(),
+            timestamp: current_time
+        });
+    }
+    
+    /// 제안 생성
+    public fun create_proposal(
+        proposer: &signer,
+        dao_addr: address,
+        title: String,
+        description: String,
+        proposal_type: u8,
+        execution_data: vector<ExecutionAction>,
+        ipfs_hash: Option<String>,
+        committee: Option<String>
+    ): u64 acquires DAOGovernance {
+        let proposer_addr = signer::address_of(proposer);
+        let dao = borrow_global_mut<DAOGovernance>(dao_addr);
+        
+        assert!(dao.is_active && !dao.emergency_pause, E_DAO_PAUSED);
+        
+        // 제안자 자격 확인
+        let proposer_voting_power = get_voting_power(dao, proposer_addr);
+        assert!(proposer_voting_power >= dao.staking_requirement, E_INSUFFICIENT_VOTING_POWER);
+        
+        // 스테이킹 요구사항 확인
+        if (smart_table::contains(&dao.user_stakes, proposer_addr)) {
+            let user_stake = smart_table::borrow(&dao.user_stakes, proposer_addr);
+            assert!(user_stake.staked_amount >= dao.staking_requirement, E_INSUFFICIENT_STAKE);
+        } else {
+            assert!(false, E_NO_STAKE_FOUND);
+        };
+        
+        let current_time = timestamp::now_seconds();
+        let proposal_id = dao.proposal_count + 1;
+        
+        // 투표 시작 및 종료 시간 계산
+        let voting_starts_at = current_time + dao.voting_config.voting_delay;
+        let voting_ends_at = voting_starts_at + dao.voting_config.voting_period;
+        let execution_eta = voting_ends_at + dao.timelock_delay;
+        
+        let proposal = Proposal {
+            id: proposal_id,
+            proposer: proposer_addr,
+            title,
+            description,
+            proposal_type,
+            execution_data,
+            votes_for: 0,
+            votes_against: 0,
+            votes_abstain: 0,
+            total_votes: 0,
+            voters: smart_table::new(),
+            quadratic_votes_for: 0,
+            quadratic_votes_against: 0,
+            created_at: current_time,
+            voting_starts_at,
+            voting_ends_at,
+            execution_eta,
+            status: 0, // pending
+            proposer_stake: dao.staking_requirement,
+            total_stake_for: 0,
+            total_stake_against: 0,
+            committee,
+            ipfs_hash,
+            tags: vector::empty()
+        };
+        
+        smart_table::add(&mut dao.proposals, proposal_id, proposal);
+        dao.proposal_count = proposal_id;
+        dao.total_proposals = dao.total_proposals + 1;
+        
+        // 이벤트 발생
+        event::emit_event(&mut dao.governance_events, GovernanceEvent {
+            event_type: string::utf8(b"proposal_created"),
+            user: proposer_addr,
+            proposal_id: option::some(proposal_id),
+            additional_data: title,
+            timestamp: current_time
+        });
+        
+        proposal_id
+    }
+    
+    /// 투표 실행
+    public fun cast_vote(
+        voter: &signer,
+        dao_addr: address,
+        proposal_id: u64,
+        support: u8,
+        reason: String,
+        quadratic_credits: Option<u64>
+    ) acquires DAOGovernance {
+        let voter_addr = signer::address_of(voter);
+        let dao = borrow_global_mut<DAOGovernance>(dao_addr);
+        
+        assert!(dao.is_active && !dao.emergency_pause, E_DAO_PAUSED);
+        assert!(smart_table::contains(&dao.proposals, proposal_id), E_PROPOSAL_NOT_FOUND);
+        assert!(support <= 2, E_INVALID_VOTE_OPTION); // 0: against, 1: for, 2: abstain
+        
+        let proposal = smart_table::borrow_mut(&mut dao.proposals, proposal_id);
+        let current_time = timestamp::now_seconds();
+        
+        // 투표 기간 확인
+        assert!(current_time >= proposal.voting_starts_at, E_VOTING_NOT_STARTED);
+        assert!(current_time <= proposal.voting_ends_at, E_VOTING_ENDED);
+        assert!(proposal.status == 1, E_PROPOSAL_NOT_ACTIVE); // active
+        
+        // 중복 투표 방지
+        assert!(!smart_table::contains(&proposal.voters, voter_addr), E_ALREADY_VOTED);
+        
+        // 투표 가중치 계산
+        let vote_weight = calculate_vote_weight(dao, voter_addr, proposal_id);
+        assert!(vote_weight >= dao.voting_config.minimum_vote_weight, E_INSUFFICIENT_VOTING_POWER);
+        
+        // 쿼드라틱 투표 가중치 계산
+        let quadratic_weight = if (dao.quadratic_voting_enabled && option::is_some(&quadratic_credits)) {
+            let credits = *option::borrow(&quadratic_credits);
+            math64::sqrt(credits)
+        } else {
+            0
+        };
+        
+        // 투표 기록
+        let vote = Vote {
+            voter: voter_addr,
+            support,
+            weight: vote_weight,
+            quadratic_weight,
+            reason,
+            voted_at: current_time
+        };
+        
+        smart_table::add(&mut proposal.voters, voter_addr, vote);
+        
+        // 투표 집계
+        match (support) {
+            0 => {
+                proposal.votes_against = proposal.votes_against + vote_weight;
+                proposal.quadratic_votes_against = proposal.quadratic_votes_against + quadratic_weight;
+            },
+            1 => {
+                proposal.votes_for = proposal.votes_for + vote_weight;
+                proposal.quadratic_votes_for = proposal.quadratic_votes_for + quadratic_weight;
+            },
+            2 => {
+                proposal.votes_abstain = proposal.votes_abstain + vote_weight;
+            },
+            _ => {}
+        };
+        
+        proposal.total_votes = proposal.votes_for + proposal.votes_against + proposal.votes_abstain;
+        dao.total_votes_cast = dao.total_votes_cast + 1;
+        
+        // 참여 보상 지급
+        if (dao.participation_rewards_enabled) {
+            distribute_participation_reward(dao, voter_addr);
+        };
+        
+        // 사용자 참여 기록 업데이트
+        if (smart_table::contains(&dao.user_stakes, voter_addr)) {
+            let user_stake = smart_table::borrow_mut(&mut dao.user_stakes, voter_addr);
+            vector::push_back(&mut user_stake.proposals_voted, proposal_id);
+            user_stake.participation_score = user_stake.participation_score + 1;
+        };
+        
+        // 조기 실행 확인
+        if (dao.voting_config.early_execution_enabled) {
+            check_early_execution(dao, proposal);
+        };
+        
+        // 이벤트 발생
+        event::emit_event(&mut dao.governance_events, GovernanceEvent {
+            event_type: string::utf8(b"vote_cast"),
+            user: voter_addr,
+            proposal_id: option::some(proposal_id),
+            additional_data: support.to_string(),
+            timestamp: current_time
+        });
+    }
+    
+    /// 위임 설정
+    public fun delegate_votes(
+        delegator: &signer,
+        dao_addr: address,
+        delegate: address,
+        amount: u64,
+        delegation_type: u8,
+        expiry: u64
+    ) acquires DAOGovernance {
+        let delegator_addr = signer::address_of(delegator);
+        let dao = borrow_global_mut<DAOGovernance>(dao_addr);
+        
+        assert!(delegator_addr != delegate, E_SELF_DELEGATION);
+        assert!(amount > 0, E_INVALID_AMOUNT);
+        assert!(expiry > timestamp::now_seconds(), E_INVALID_EXPIRY);
+        
+        // 위임자의 투표권 확인
+        let available_power = get_available_voting_power(dao, delegator_addr);
+        assert!(available_power >= amount, E_INSUFFICIENT_VOTING_POWER);
+        
+        let current_time = timestamp::now_seconds();
+        
+        // 기존 위임 해제
+        if (smart_table::contains(&dao.delegations, delegator_addr)) {
+            let old_delegation = smart_table::remove(&mut dao.delegations, delegator_addr);
+            
+            // 기존 대리인의 통계 업데이트
+            if (smart_table::contains(&dao.delegates, old_delegation.delegate)) {
+                let old_delegate_profile = smart_table::borrow_mut(&mut dao.delegates, old_delegation.delegate);
+                old_delegate_profile.total_delegated = old_delegate_profile.total_delegated - old_delegation.delegation_amount;
+                old_delegate_profile.delegator_count = old_delegate_profile.delegator_count - 1;
+            }
+        };
+        
+        // 새로운 위임 설정
+        let delegation = Delegation {
+            delegator: delegator_addr,
+            delegate,
+            delegation_amount: amount,
+            delegation_type,
+            expiry,
+            created_at: current_time
+        };
+        
+        smart_table::add(&mut dao.delegations, delegator_addr, delegation);
+        
+        // 대리인 프로필 업데이트
+        if (smart_table::contains(&dao.delegates, delegate)) {
+            let delegate_profile = smart_table::borrow_mut(&mut dao.delegates, delegate);
+            delegate_profile.total_delegated = delegate_profile.total_delegated + amount;
+            delegate_profile.delegator_count = delegate_profile.delegator_count + 1;
+            delegate_profile.last_activity = current_time;
+        } else {
+            // 새로운 대리인 프로필 생성
+            let new_delegate_profile = DelegateProfile {
+                delegate,
+                name: string::utf8(b""),
+                description: string::utf8(b""),
+                platform_url: option::none(),
+                total_delegated: amount,
+                delegator_count: 1,
+                proposals_voted: 0,
+                participation_rate: 0,
+                expertise_areas: vector::empty(),
+                verified: false,
+                verification_date: 0,
+                created_at: current_time,
+                last_activity: current_time
+            };
+            smart_table::add(&mut dao.delegates, delegate, new_delegate_profile);
+        };
+        
+        // 이벤트 발생
+        event::emit_event(&mut dao.governance_events, GovernanceEvent {
+            event_type: string::utf8(b"delegation_created"),
+            user: delegator_addr,
+            proposal_id: option::none(),
+            additional_data: delegate.to_string(),
+            timestamp: current_time
+        });
+    }
+    
+    /// 제안 실행
+    public fun execute_proposal(
+        executor: &signer,
+        dao_addr: address,
+        proposal_id: u64
+    ) acquires DAOGovernance {
+        let executor_addr = signer::address_of(executor);
+        let dao = borrow_global_mut<DAOGovernance>(dao_addr);
+        
+        assert!(smart_table::contains(&dao.proposals, proposal_id), E_PROPOSAL_NOT_FOUND);
+        
+        let proposal = smart_table::borrow_mut(&mut dao.proposals, proposal_id);
+        let current_time = timestamp::now_seconds();
+        
+        // 실행 조건 확인
+        assert!(proposal.status == 2, E_PROPOSAL_NOT_SUCCEEDED); // succeeded
+        assert!(current_time >= proposal.execution_eta, E_EXECUTION_NOT_READY);
+        assert!(current_time <= proposal.execution_eta + dao.execution_window, E_EXECUTION_EXPIRED);
+        
+        // 멀티시그 확인 (중요한 제안의 경우)
+        if (is_critical_proposal(proposal)) {
+            assert!(
+                vector::contains(&dao.multisig_signers, &executor_addr) || 
+                executor_addr == *option::borrow(&dao.guardian_council),
+                E_UNAUTHORIZED_EXECUTION
+            );
+        };
+        
+        // 실행 액션들 수행
+        let i = 0;
+        while (i < vector::length(&proposal.execution_data)) {
+            let action = vector::borrow(&proposal.execution_data, i);
+            execute_action(dao_addr, action);
+            i = i + 1;
+        };
+        
+        proposal.status = 4; // executed
+        
+        // 제안자 스테이크 반환
+        if (smart_table::contains(&dao.user_stakes, proposal.proposer)) {
+            let proposer_stake = smart_table::borrow_mut(&mut dao.user_stakes, proposal.proposer);
+            proposer_stake.staked_amount = proposer_stake.staked_amount + proposal.proposer_stake;
+        };
+        
+        // 이벤트 발생
+        event::emit_event(&mut dao.governance_events, GovernanceEvent {
+            event_type: string::utf8(b"proposal_executed"),
+            user: executor_addr,
+            proposal_id: option::some(proposal_id),
+            additional_data: string::utf8(b""),
+            timestamp: current_time
+        });
+    }
+    
+    /// 위원회 생성
+    public fun create_committee(
+        creator: &signer,
+        dao_addr: address,
+        name: String,
+        description: String,
+        members: vector<address>,
+        member_limit: u8,
+        focus_areas: vector<String>
+    ) acquires DAOGovernance {
+        let creator_addr = signer::address_of(creator);
+        let dao = borrow_global_mut<DAOGovernance>(dao_addr);
+        
+        // 권한 확인
+        assert!(
+            creator_addr == *option::borrow(&dao.guardian_council) ||
+            get_voting_power(dao, creator_addr) >= dao.staking_requirement * 10,
+            E_INSUFFICIENT_PERMISSIONS
+        );
+        
+        assert!(!smart_table::contains(&dao.committees, name), E_COMMITTEE_EXISTS);
+        assert!(vector::length(&members) <= (member_limit as u64), E_TOO_MANY_MEMBERS);
+        
+        let committee = Committee {
+            name,
+            description,
+            members,
+            member_limit,
+            proposal_threshold: dao.staking_requirement / 2, // 위원회는 낮은 임계값
+            voting_period: dao.voting_config.voting_period / 2, // 짧은 투표 기간
+            focus_areas,
+            proposals_reviewed: 0,
+            decisions_made: 0,
+            is_active: true,
+            created_at: timestamp::now_seconds()
+        };
+        
+        smart_table::add(&mut dao.committees, name, committee);
+        
+        // 이벤트 발생
+        event::emit_event(&mut dao.governance_events, GovernanceEvent {
+            event_type: string::utf8(b"committee_created"),
+            user: creator_addr,
+            proposal_id: option::none(),
+            additional_data: name,
+            timestamp: timestamp::now_seconds()
+        });
+    }
+    
+    /// 쿼드라틱 투표 활성화/비활성화
+    public fun toggle_quadratic_voting(
+        admin: &signer,
+        dao_addr: address,
+        enabled: bool
+    ) acquires DAOGovernance {
+        let admin_addr = signer::address_of(admin);
+        let dao = borrow_global_mut<DAOGovernance>(dao_addr);
+        
+        assert!(
+            admin_addr == *option::borrow(&dao.guardian_council),
+            E_UNAUTHORIZED
+        );
+        
+        dao.quadratic_voting_enabled = enabled;
+        dao.last_updated = timestamp::now_seconds();
+        
+        // 이벤트 발생
+        event::emit_event(&mut dao.governance_events, GovernanceEvent {
+            event_type: string::utf8(b"quadratic_voting_toggled"),
+            user: admin_addr,
+            proposal_id: option::none(),
+            additional_data: enabled.to_string(),
+            timestamp: timestamp::now_seconds()
+        });
+    }
+    
+    // 헬퍼 함수들
+    
+    /// 투표 가중치 계산
+    fun calculate_vote_weight(dao: &DAOGovernance, voter: address, proposal_id: u64): u64 {
+        match (dao.voting_config.vote_weight_strategy) {
+            0 => {
+                // 토큰 잔액 기반
+                primary_fungible_store::balance(voter, dao.governance_token)
+            },
+            1 => {
+                // 스테이킹 잔액 기반
+                if (smart_table::contains(&dao.user_stakes, voter)) {
+                    let user_stake = smart_table::borrow(&dao.user_stakes, voter);
+                    user_stake.staked_amount
+                } else {
+                    0
+                }
+            },
+            2 => {
+                // 시간 가중 잔액 (스테이킹 기간 고려)
+                calculate_time_weighted_balance(dao, voter)
+            },
+            _ => 0
+        }
+    }
+    
+    /// 시간 가중 잔액 계산
+    fun calculate_time_weighted_balance(dao: &DAOGovernance, voter: address): u64 {
+        if (!smart_table::contains(&dao.user_stakes, voter)) {
+            return 0
+        };
+        
+        let user_stake = smart_table::borrow(&dao.user_stakes, voter);
+        let current_time = timestamp::now_seconds();
+        let stake_duration = current_time - user_stake.created_at;
+        
+        // 스테이킹 기간에 따라 가중치 적용 (최대 2배)
+        let time_multiplier = math64::min(
+            10000 + (stake_duration * 10000) / (365 * 24 * 3600), // 1년 기준
+            20000 // 최대 2배
+        );
+        
+        (user_stake.staked_amount * time_multiplier) / 10000
+    }
+    
+    /// 사용가능한 투표권 계산
+    fun get_available_voting_power(dao: &DAOGovernance, user: address): u64 {
+        let total_power = get_voting_power(dao, user);
+        
+        // 기존 위임량 차감
+        if (smart_table::contains(&dao.delegations, user)) {
+            let delegation = smart_table::borrow(&dao.delegations, user);
+            if (delegation.expiry > timestamp::now_seconds()) {
+                total_power - delegation.delegation_amount
+            } else {
+                total_power
+            }
+        } else {
+            total_power
+        }
+    }
+    
+    /// 총 투표권 계산
+    fun get_voting_power(dao: &DAOGovernance, user: address): u64 {
+        let mut total_power = calculate_vote_weight(dao, user, 0);
+        
+        // 위임받은 투표권 추가
+        smart_table::for_each_ref(&dao.delegations, |delegator, delegation| {
+            if (delegation.delegate == user && delegation.expiry > timestamp::now_seconds()) {
+                total_power = total_power + delegation.delegation_amount;
+            }
+        });
+        
+        total_power
+    }
+    
+    /// 참여 보상 지급
+    fun distribute_participation_reward(dao: &mut DAOGovernance, voter: address) {
+        if (dao.reward_pool >= dao.rewards_per_vote) {
+            if (smart_table::contains(&dao.user_stakes, voter)) {
+                let user_stake = smart_table::borrow_mut(&mut dao.user_stakes, voter);
+                user_stake.unclaimed_rewards = user_stake.unclaimed_rewards + dao.rewards_per_vote;
+                dao.reward_pool = dao.reward_pool - dao.rewards_per_vote;
+            }
+        }
+    }
+    
+    /// 조기 실행 확인
+    fun check_early_execution(dao: &DAOGovernance, proposal: &mut Proposal) {
+        let total_supply = get_total_voting_supply(dao);
+        let participation_rate = (proposal.total_votes * 10000) / total_supply;
+        
+        if (participation_rate >= dao.quorum_threshold) {
+            let approval_rate = (proposal.votes_for * 10000) / proposal.total_votes;
+            
+            if (approval_rate >= dao.voting_config.early_execution_threshold) {
+                // 조기 실행 가능
+                proposal.status = 2; // succeeded
+                proposal.voting_ends_at = timestamp::now_seconds();
+            }
+        }
+    }
+    
+    /// 중요한 제안 여부 확인
+    fun is_critical_proposal(proposal: &Proposal): bool {
+        proposal.proposal_type == 1 || // 업그레이드 제안
+        proposal.proposal_type == 2    // 지출 제안
+    }
+    
+    /// 액션 실행
+    fun execute_action(dao_addr: address, action: &ExecutionAction) {
+        // 실제 구현에서는 타겟 컨트랙트의 함수를 호출
+        // 여기서는 예시로 간단한 로그만 남김
+        // call_function(action.target, action.function_name, action.args, action.value);
+    }
+    
+    /// 총 투표 공급량 조회
+    fun get_total_voting_supply(dao: &DAOGovernance): u64 {
+        // 실제로는 토큰의 총 공급량에서 락업된 토큰 등을 제외
+        dao.total_staked + 1000000 // 간단한 추정
+    }
+    
+    // 조회 함수들
+    
+    /// 제안 정보 조회
+    public fun get_proposal(
+        dao_addr: address,
+        proposal_id: u64
+    ): Option<ProposalInfo> acquires DAOGovernance {
+        let dao = borrow_global<DAOGovernance>(dao_addr);
+        
+        if (smart_table::contains(&dao.proposals, proposal_id)) {
+            let proposal = smart_table::borrow(&dao.proposals, proposal_id);
+            
+            option::some(ProposalInfo {
+                id: proposal.id,
+                proposer: proposal.proposer,
+                title: proposal.title,
+                description: proposal.description,
+                proposal_type: proposal.proposal_type,
+                votes_for: proposal.votes_for,
+                votes_against: proposal.votes_against,
+                votes_abstain: proposal.votes_abstain,
+                total_votes: proposal.total_votes,
+                created_at: proposal.created_at,
+                voting_starts_at: proposal.voting_starts_at,
+                voting_ends_at: proposal.voting_ends_at,
+                execution_eta: proposal.execution_eta,
+                status: proposal.status,
+                ipfs_hash: proposal.ipfs_hash
+            })
+        } else {
+            option::none()
+        }
+    }
+    
+    struct ProposalInfo has drop {
+        id: u64,
+        proposer: address,
+        title: String,
+        description: String,
+        proposal_type: u8,
+        votes_for: u64,
+        votes_against: u64,
+        votes_abstain: u64,
+        total_votes: u64,
+        created_at: u64,
+        voting_starts_at: u64,
+        voting_ends_at: u64,
+        execution_eta: u64,
+        status: u8,
+        ipfs_hash: Option<String>
+    }
+    
+    /// 사용자 투표권 조회
+    public fun get_user_voting_power(
+        dao_addr: address,
+        user: address
+    ): u64 acquires DAOGovernance {
+        let dao = borrow_global<DAOGovernance>(dao_addr);
+        get_voting_power(dao, user)
+    }
+    
+    /// 대리인 정보 조회
+    public fun get_delegate_info(
+        dao_addr: address,
+        delegate: address
+    ): Option<DelegateProfile> acquires DAOGovernance {
+        let dao = borrow_global<DAOGovernance>(dao_addr);
+        
+        if (smart_table::contains(&dao.delegates, delegate)) {
+            option::some(*smart_table::borrow(&dao.delegates, delegate))
+        } else {
+            option::none()
+        }
+    }
+    
+    /// DAO 통계 조회
+    public fun get_dao_stats(dao_addr: address): DAOStats acquires DAOGovernance {
+        let dao = borrow_global<DAOGovernance>(dao_addr);
+        
+        DAOStats {
+            total_proposals: dao.total_proposals,
+            total_votes_cast: dao.total_votes_cast,
+            total_staked: dao.total_staked,
+            active_delegates: smart_table::length(&dao.delegates),
+            participation_rate: calculate_average_participation_rate(dao),
+            treasury_balance: get_treasury_balance(dao_addr)
+        }
+    }
+    
+    struct DAOStats has drop {
+        total_proposals: u64,
+        total_votes_cast: u64,
+        total_staked: u64,
+        active_delegates: u64,
+        participation_rate: u64,
+        treasury_balance: u64
+    }
+    
+    fun calculate_average_participation_rate(dao: &DAOGovernance): u64 {
+        if (dao.total_proposals == 0) {
+            return 0
+        };
+        
+        // 간단한 참여율 계산
+        (dao.total_votes_cast * 10000) / (dao.total_proposals * get_total_voting_supply(dao))
+    }
+    
+    fun get_treasury_balance(dao_addr: address): u64 {
+        // DAO 금고 잔액 조회
+        1000000 // placeholder
+    }
+    
+    // 에러 코드
+    const E_INVALID_QUORUM: u64 = 1;
+    const E_INVALID_THRESHOLD: u64 = 2;
+    const E_INVALID_VOTING_PERIOD: u64 = 3;
+    const E_DAO_PAUSED: u64 = 4;
+    const E_INVALID_AMOUNT: u64 = 5;
+    const E_INSUFFICIENT_VOTING_POWER: u64 = 6;
+    const E_INSUFFICIENT_STAKE: u64 = 7;
+    const E_NO_STAKE_FOUND: u64 = 8;
+    const E_PROPOSAL_NOT_FOUND: u64 = 9;
+    const E_INVALID_VOTE_OPTION: u64 = 10;
+    const E_VOTING_NOT_STARTED: u64 = 11;
+    const E_VOTING_ENDED: u64 = 12;
+    const E_PROPOSAL_NOT_ACTIVE: u64 = 13;
+    const E_ALREADY_VOTED: u64 = 14;
+    const E_SELF_DELEGATION: u64 = 15;
+    const E_INVALID_EXPIRY: u64 = 16;
+    const E_PROPOSAL_NOT_SUCCEEDED: u64 = 17;
+    const E_EXECUTION_NOT_READY: u64 = 18;
+    const E_EXECUTION_EXPIRED: u64 = 19;
+    const E_UNAUTHORIZED_EXECUTION: u64 = 20;
+    const E_INSUFFICIENT_PERMISSIONS: u64 = 21;
+    const E_COMMITTEE_EXISTS: u64 = 22;
+    const E_TOO_MANY_MEMBERS: u64 = 23;
+    const E_UNAUTHORIZED: u64 = 24;
+}
+```
+
+## 🗳️ TypeScript SDK 통합
+
+### 종합 거버넌스 관리 클래스
+```typescript
+import {
+  MovementClient,
+  MovementAccount,
+  Network
+} from "@movementnetwork/ts-sdk";
+
+interface ProposalData {
+  title: string;
+  description: string;
+  proposalType: number;
+  executionActions: ExecutionAction[];
+  ipfsHash?: string;
+  committee?: string;
+}
+
+interface ExecutionAction {
+  target: string;
+  functionName: string;
+  args: Uint8Array;
+  value: number;
+}
+
+interface VoteOption {
+  support: number; // 0: against, 1: for, 2: abstain
+  reason: string;
+  quadraticCredits?: number;
+}
+
+interface DelegationConfig {
+  delegate: string;
+  amount: number;
+  delegationType: number;
+  expiry: number;
+}
+
+class DAOGovernanceManager {
+  private client: MovementClient;
+  private moduleAddress: string;
+  
+  constructor(client: MovementClient, moduleAddress: string) {
+    this.client = client;
+    this.moduleAddress = moduleAddress;
+  }
+  
+  // DAO 거버넌스 시스템 초기화
+  async initializeDAO(
+    admin: MovementAccount,
+    name: string,
+    description: string,
+    governanceToken: string,
+    votingPeriod: number,
+    quorumThreshold: number,
+    approvalThreshold: number
+  ): Promise<string> {
+    const payload = {
+      type: "entry_function_payload",
+      function: `${this.moduleAddress}::comprehensive_dao::initialize_dao_governance`,
+      type_arguments: [],
+      arguments: [
+        name,
+        description,
+        governanceToken,
+        votingPeriod,
+        quorumThreshold,
+        approvalThreshold
+      ]
+    };
+    
+    const txn = await this.client.generateTransaction(admin.address(), payload);
+    const signedTxn = await this.client.signTransaction(admin, txn);
+    const response = await this.client.submitTransaction(signedTxn);
+    
+    await this.client.waitForTransaction(response.hash);
+    return response.hash;
+  }
+  
+  // 거버넌스 토큰 스테이킹
+  async stakeGovernanceTokens(
+    user: MovementAccount,
+    daoAddress: string,
+    amount: number,
+    lockPeriod: number
+  ): Promise<string> {
+    const payload = {
+      type: "entry_function_payload",
+      function: `${this.moduleAddress}::comprehensive_dao::stake_governance_tokens`,
+      type_arguments: [],
+      arguments: [
+        daoAddress,
+        amount.toString(),
+        lockPeriod.toString()
+      ]
+    };
+    
+    const txn = await this.client.generateTransaction(user.address(), payload);
+    const signedTxn = await this.client.signTransaction(user, txn);
+    const response = await this.client.submitTransaction(signedTxn);
+    
+    await this.client.waitForTransaction(response.hash);
+    return response.hash;
+  }
+  
+  // 제안 생성
+  async createProposal(
+    proposer: MovementAccount,
+    daoAddress: string,
+    proposalData: ProposalData
+  ): Promise<{
+    success: boolean;
+    proposalId?: number;
+    transactionHash: string;
+  }> {
+    try {
+      const payload = {
+        type: "entry_function_payload",
+        function: `${this.moduleAddress}::comprehensive_dao::create_proposal`,
+        type_arguments: [],
+        arguments: [
+          daoAddress,
+          proposalData.title,
+          proposalData.description,
+          proposalData.proposalType,
+          proposalData.executionActions,
+          proposalData.ipfsHash ? [proposalData.ipfsHash] : [],
+          proposalData.committee ? [proposalData.committee] : []
+        ]
+      };
+      
+      const txn = await this.client.generateTransaction(proposer.address(), payload);
+      const signedTxn = await this.client.signTransaction(proposer, txn);
+      const response = await this.client.submitTransaction(signedTxn);
+      
+      await this.client.waitForTransaction(response.hash);
+      
+      // 이벤트에서 제안 ID 추출
+      const proposalId = await this.extractProposalIdFromTransaction(response.hash);
+      
+      return {
+        success: true,
+        proposalId,
+        transactionHash: response.hash
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        transactionHash: error.hash || ""
+      };
+    }
+  }
+  
+  // 투표 실행
+  async castVote(
+    voter: MovementAccount,
+    daoAddress: string,
+    proposalId: number,
+    voteOption: VoteOption
+  ): Promise<string> {
+    const payload = {
+      type: "entry_function_payload",
+      function: `${this.moduleAddress}::comprehensive_dao::cast_vote`,
+      type_arguments: [],
+      arguments: [
+        daoAddress,
+        proposalId.toString(),
+        voteOption.support.toString(),
+        voteOption.reason,
+        voteOption.quadraticCredits ? [voteOption.quadraticCredits.toString()] : []
+      ]
+    };
+    
+    const txn = await this.client.generateTransaction(voter.address(), payload);
+    const signedTxn = await this.client.signTransaction(voter, txn);
+    const response = await this.client.submitTransaction(signedTxn);
+    
+    await this.client.waitForTransaction(response.hash);
+    return response.hash;
+  }
+  
+  // 위임 설정
+  async delegateVotes(
+    delegator: MovementAccount,
+    daoAddress: string,
+    delegationConfig: DelegationConfig
+  ): Promise<string> {
+    const payload = {
+      type: "entry_function_payload",
+      function: `${this.moduleAddress}::comprehensive_dao::delegate_votes`,
+      type_arguments: [],
+      arguments: [
+        daoAddress,
+        delegationConfig.delegate,
+        delegationConfig.amount.toString(),
+        delegationConfig.delegationType.toString(),
+        delegationConfig.expiry.toString()
+      ]
+    };
+    
+    const txn = await this.client.generateTransaction(delegator.address(), payload);
+    const signedTxn = await this.client.signTransaction(delegator, txn);
+    const response = await this.client.submitTransaction(signedTxn);
+    
+    await this.client.waitForTransaction(response.hash);
+    return response.hash;
+  }
+  
+  // 제안 실행
+  async executeProposal(
+    executor: MovementAccount,
+    daoAddress: string,
+    proposalId: number
+  ): Promise<{
+    success: boolean;
+    transactionHash: string;
+    error?: string;
+  }> {
+    try {
+      const payload = {
+        type: "entry_function_payload",
+        function: `${this.moduleAddress}::comprehensive_dao::execute_proposal`,
+        type_arguments: [],
+        arguments: [
+          daoAddress,
+          proposalId.toString()
+        ]
+      };
+      
+      const txn = await this.client.generateTransaction(executor.address(), payload);
+      const signedTxn = await this.client.signTransaction(executor, txn);
+      const response = await this.client.submitTransaction(signedTxn);
+      
+      await this.client.waitForTransaction(response.hash);
+      
+      return {
+        success: true,
+        transactionHash: response.hash
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        transactionHash: error.hash || "",
+        error: error.message
+      };
+    }
+  }
+  
+  // 위원회 생성
+  async createCommittee(
+    creator: MovementAccount,
+    daoAddress: string,
+    name: string,
+    description: string,
+    members: string[],
+    memberLimit: number,
+    focusAreas: string[]
+  ): Promise<string> {
+    const payload = {
+      type: "entry_function_payload",
+      function: `${this.moduleAddress}::comprehensive_dao::create_committee`,
+      type_arguments: [],
+      arguments: [
+        daoAddress,
+        name,
+        description,
+        members,
+        memberLimit.toString(),
+        focusAreas
+      ]
+    };
+    
+    const txn = await this.client.generateTransaction(creator.address(), payload);
+    const signedTxn = await this.client.signTransaction(creator, txn);
+    const response = await this.client.submitTransaction(signedTxn);
+    
+    await this.client.waitForTransaction(response.hash);
+    return response.hash;
+  }
+  
+  // 쿼드라틱 투표 토글
+  async toggleQuadraticVoting(
+    admin: MovementAccount,
+    daoAddress: string,
+    enabled: boolean
+  ): Promise<string> {
+    const payload = {
+      type: "entry_function_payload",
+      function: `${this.moduleAddress}::comprehensive_dao::toggle_quadratic_voting`,
+      type_arguments: [],
+      arguments: [
+        daoAddress,
+        enabled
+      ]
+    };
+    
+    const txn = await this.client.generateTransaction(admin.address(), payload);
+    const signedTxn = await this.client.signTransaction(admin, txn);
+    const response = await this.client.submitTransaction(signedTxn);
+    
+    await this.client.waitForTransaction(response.hash);
+    return response.hash;
+  }
+  
+  // 제안 정보 조회
+  async getProposal(
+    daoAddress: string,
+    proposalId: number
+  ): Promise<any> {
+    const payload = {
+      function: `${this.moduleAddress}::comprehensive_dao::get_proposal`,
+      type_arguments: [],
+      arguments: [daoAddress, proposalId.toString()]
+    };
+    
+    try {
+      const result = await this.client.view(payload);
+      if (result && result[0]) {
+        return this.parseProposalInfo(result[0]);
+      }
+      return null;
+    } catch (error) {
+      console.error("Failed to get proposal:", error);
+      return null;
+    }
+  }
+  
+  // 사용자 투표권 조회
+  async getUserVotingPower(
+    daoAddress: string,
+    userAddress: string
+  ): Promise<number> {
+    const payload = {
+      function: `${this.moduleAddress}::comprehensive_dao::get_user_voting_power`,
+      type_arguments: [],
+      arguments: [daoAddress, userAddress]
+    };
+    
+    try {
+      const result = await this.client.view(payload);
+      return parseInt(result[0] as string);
+    } catch (error) {
+      console.error("Failed to get voting power:", error);
+      return 0;
+    }
+  }
+  
+  // 대리인 정보 조회
+  async getDelegateInfo(
+    daoAddress: string,
+    delegateAddress: string
+  ): Promise<any> {
+    const payload = {
+      function: `${this.moduleAddress}::comprehensive_dao::get_delegate_info`,
+      type_arguments: [],
+      arguments: [daoAddress, delegateAddress]
+    };
+    
+    try {
+      const result = await this.client.view(payload);
+      if (result && result[0]) {
+        return this.parseDelegateInfo(result[0]);
+      }
+      return null;
+    } catch (error) {
+      console.error("Failed to get delegate info:", error);
+      return null;
+    }
+  }
+  
+  // DAO 통계 조회
+  async getDAOStats(daoAddress: string): Promise<any> {
+    const payload = {
+      function: `${this.moduleAddress}::comprehensive_dao::get_dao_stats`,
+      type_arguments: [],
+      arguments: [daoAddress]
+    };
+    
+    try {
+      const result = await this.client.view(payload);
+      return this.parseDAOStats(result[0]);
+    } catch (error) {
+      console.error("Failed to get DAO stats:", error);
+      return null;
+    }
+  }
+  
+  // 활성 제안 목록 조회
+  async getActiveProposals(daoAddress: string): Promise<any[]> {
+    // 실제로는 인덱싱 서비스나 이벤트 로그를 통해 조회
+    const allProposals = await this.getAllProposals(daoAddress);
+    const currentTime = Math.floor(Date.now() / 1000);
+    
+    return allProposals.filter(proposal => 
+      proposal.status === 1 && // active
+      proposal.votingStartsAt <= currentTime &&
+      proposal.votingEndsAt > currentTime
+    );
+  }
+  
+  // 제안 시뮬레이션
+  async simulateProposal(
+    daoAddress: string,
+    proposalData: ProposalData
+  ): Promise<{
+    estimatedGas: number;
+    requiredStake: number;
+    executionDelay: number;
+    potentialOutcome: string;
+  }> {
+    // 제안 실행 비용 추정
+    const estimatedGas = await this.estimateExecutionGas(proposalData.executionActions);
+    
+    // 필요한 스테이킹 요구사항 조회
+    const requiredStake = await this.getStakingRequirement(daoAddress);
+    
+    // 실행 지연시간 조회
+    const executionDelay = await this.getTimelockDelay(daoAddress);
+    
+    // 결과 예측 (간단한 휴리스틱)
+    const potentialOutcome = await this.predictProposalOutcome(daoAddress, proposalData);
+    
+    return {
+      estimatedGas,
+      requiredStake,
+      executionDelay,
+      potentialOutcome
+    };
+  }
+  
+  // 거버넌스 참여 분석
+  async analyzeParticipation(
+    daoAddress: string,
+    userAddress: string,
+    period: number = 30 // 일수
+  ): Promise<{
+    proposalsVoted: number;
+    participationRate: number;
+    votingPowerUsed: number;
+    rewardsEarned: number;
+    delegationsReceived: number;
+  }> {
+    // 실제로는 이벤트 로그나 인덱싱 서비스에서 데이터 수집
+    const userStats = await this.getUserStats(daoAddress, userAddress, period);
+    
+    return {
+      proposalsVoted: userStats.proposalsVoted,
+      participationRate: userStats.participationRate,
+      votingPowerUsed: userStats.votingPowerUsed,
+      rewardsEarned: userStats.rewardsEarned,
+      delegationsReceived: userStats.delegationsReceived
+    };
+  }
+  
+  // 거버넌스 이벤트 모니터링
+  async monitorGovernanceEvents(
+    daoAddress: string,
+    callback: (event: any) => void,
+    eventTypes?: string[]
+  ): Promise<void> {
+    const pollInterval = 5000; // 5초마다
+    
+    const poll = async () => {
+      try {
+        const events = await this.getRecentGovernanceEvents(daoAddress, eventTypes);
+        events.forEach(callback);
+      } catch (error) {
+        console.error("Failed to poll governance events:", error);
+      }
+      
+      setTimeout(poll, pollInterval);
+    };
+    
+    poll();
+  }
+  
+  // 헬퍼 함수들
+  
+  private async extractProposalIdFromTransaction(txHash: string): Promise<number> {
+    // 트랜잭션 이벤트에서 제안 ID 추출
+    const txResult = await this.client.getTransactionByHash(txHash);
+    // 실제로는 이벤트 파싱
+    return 1; // placeholder
+  }
+  
+  private parseProposalInfo(data: any): any {
+    return {
+      id: parseInt(data.id),
+      proposer: data.proposer,
+      title: data.title,
+      description: data.description,
+      proposalType: parseInt(data.proposal_type),
+      votesFor: parseInt(data.votes_for),
+      votesAgainst: parseInt(data.votes_against),
+      votesAbstain: parseInt(data.votes_abstain),
+      totalVotes: parseInt(data.total_votes),
+      createdAt: parseInt(data.created_at),
+      votingStartsAt: parseInt(data.voting_starts_at),
+      votingEndsAt: parseInt(data.voting_ends_at),
+      executionEta: parseInt(data.execution_eta),
+      status: parseInt(data.status),
+      ipfsHash: data.ipfs_hash
+    };
+  }
+  
+  private parseDelegateInfo(data: any): any {
+    return {
+      delegate: data.delegate,
+      name: data.name,
+      description: data.description,
+      platformUrl: data.platform_url,
+      totalDelegated: parseInt(data.total_delegated),
+      delegatorCount: parseInt(data.delegator_count),
+      proposalsVoted: parseInt(data.proposals_voted),
+      participationRate: parseInt(data.participation_rate),
+      expertiseAreas: data.expertise_areas,
+      verified: data.verified,
+      verificationDate: parseInt(data.verification_date),
+      createdAt: parseInt(data.created_at),
+      lastActivity: parseInt(data.last_activity)
+    };
+  }
+  
+  private parseDAOStats(data: any): any {
+    return {
+      totalProposals: parseInt(data.total_proposals),
+      totalVotesCast: parseInt(data.total_votes_cast),
+      totalStaked: parseInt(data.total_staked),
+      activeDelegates: parseInt(data.active_delegates),
+      participationRate: parseInt(data.participation_rate),
+      treasuryBalance: parseInt(data.treasury_balance)
+    };
+  }
+  
+  private async getAllProposals(daoAddress: string): Promise<any[]> {
+    // 실제로는 인덱싱 서비스에서 조회
+    return []; // placeholder
+  }
+  
+  private async estimateExecutionGas(actions: ExecutionAction[]): Promise<number> {
+    // 각 액션의 가스 비용 추정
+    return actions.length * 100000; // 간단한 추정
+  }
+  
+  private async getStakingRequirement(daoAddress: string): Promise<number> {
+    // DAO 설정에서 스테이킹 요구사항 조회
+    return 10000; // placeholder
+  }
+  
+  private async getTimelockDelay(daoAddress: string): Promise<number> {
+    // DAO의 타임락 지연시간 조회
+    return 172800; // 2일
+  }
+  
+  private async predictProposalOutcome(
+    daoAddress: string,
+    proposalData: ProposalData
+  ): Promise<string> {
+    // 간단한 결과 예측 로직
+    return "likely_to_pass"; // placeholder
+  }
+  
+  private async getUserStats(
+    daoAddress: string,
+    userAddress: string,
+    period: number
+  ): Promise<any> {
+    // 사용자 통계 조회
+    return {
+      proposalsVoted: 5,
+      participationRate: 80,
+      votingPowerUsed: 1000,
+      rewardsEarned: 100,
+      delegationsReceived: 2
+    }; // placeholder
+  }
+  
+  private async getRecentGovernanceEvents(
+    daoAddress: string,
+    eventTypes?: string[]
+  ): Promise<any[]> {
+    // 최근 거버넌스 이벤트 조회
+    return []; // placeholder
+  }
+}
+
+// 사용 예시
+async function setupDAOGovernance() {
+  const client = new MovementClient({ network: Network.DEVNET });
+  const admin = new MovementAccount();
+  const daoManager = new DAOGovernanceManager(client, "0x1");
+  
+  // 1. DAO 초기화
+  const initTxHash = await daoManager.initializeDAO(
+    admin,
+    "DeFi Protocol DAO",
+    "Decentralized governance for our DeFi protocol",
+    "0x123...::governance_token", // 거버넌스 토큰 주소
+    604800, // 7일 투표 기간
+    2500,   // 25% 쿼럼
+    5000    // 50% 승인 임계값
+  );
+  
+  console.log("DAO initialized:", initTxHash);
+  
+  // 2. 거버넌스 토큰 스테이킹
+  const user = new MovementAccount();
+  const stakeTxHash = await daoManager.stakeGovernanceTokens(
+    user,
+    "0x456...", // DAO 주소
+    100000,     // 스테이킹 양
+    2592000     // 30일 락업
+  );
+  
+  console.log("Tokens staked:", stakeTxHash);
+  
+  // 3. 제안 생성
+  const proposalData: ProposalData = {
+    title: "Increase Trading Fee to 0.5%",
+    description: "Proposal to increase the protocol trading fee from 0.3% to 0.5% to improve protocol revenue",
+    proposalType: 0, // parameter change
+    executionActions: [
+      {
+        target: "0x789...", // DEX 컨트랙트 주소
+        functionName: "update_fee_rate",
+        args: new Uint8Array([0, 50]), // 0.5% 인코딩
+        value: 0
+      }
+    ],
+    ipfsHash: "QmYx7r8VQ9k3kNqV5oRjfNxWzqMp3XzKwCbPt7S4vFhGjX"
+  };
+  
+  const proposalResult = await daoManager.createProposal(
+    user,
+    "0x456...",
+    proposalData
+  );
+  
+  if (proposalResult.success) {
+    console.log("Proposal created:", proposalResult.proposalId);
+    
+    // 4. 투표 실행
+    const voteOption: VoteOption = {
+      support: 1, // 찬성
+      reason: "This will improve protocol sustainability",
+      quadraticCredits: 10000
+    };
+    
+    const voteTxHash = await daoManager.castVote(
+      user,
+      "0x456...",
+      proposalResult.proposalId!,
+      voteOption
+    );
+    
+    console.log("Vote cast:", voteTxHash);
+    
+    // 5. 제안 상태 확인
+    const proposal = await daoManager.getProposal("0x456...", proposalResult.proposalId!);
+    console.log("Proposal status:", proposal);
+    
+    // 6. DAO 통계 조회
+    const stats = await daoManager.getDAOStats("0x456...");
+    console.log("DAO stats:", stats);
+  }
+  
+  // 7. 거버넌스 이벤트 모니터링
+  await daoManager.monitorGovernanceEvents(
+    "0x456...",
+    (event) => {
+      console.log("Governance event:", event);
+    },
+    ["proposal_created", "vote_cast", "proposal_executed"]
+  );
+}
+
+// setupDAOGovernance().catch(console.error);
+```
+
+## 🎯 마무리
+
+축하합니다! 🎉 Movement Network의 **완전한 DeFi 개발 가이드**를 완성했습니다!
+
+### 🏆 **완성된 시스템들:**
+
+1. **🪙 Fungible Asset 프레임워크** - 고급 토큰 시스템
+2. **🏦 Lending & Borrowing** - 담보 기반 대출 플랫폼  
+3. **🔄 DEX & AMM** - 탈중앙화 거래소
+4. **🏛️ 거버넌스 & DAO** - 투명한 의사결정 시스템
+
+### 🚀 **다음 단계:**
+
+- **실전 배포**: 테스트넷에서 시스템 배포 및 테스트
+- **보안 감사**: 스마트 컨트랙트 보안 검토
+- **사용자 인터페이스**: React/Vue.js 프론트엔드 개발
+- **모니터링**: 온체인 분석 및 대시보드 구축
+
+## 📚 참고 자료
+
+- [Movement 개발자 포털](https://developer.movementnetwork.xyz/)
+- [Movement GitHub](https://github.com/movementnetwork)
+- [Movement 디스코드](https://discord.gg/movementnetwork)
+- [Move 언어 가이드](https://move-language.github.io/move/)
+
+---
+
+*Movement Network에서 차세대 DeFi 생태계를 구축하세요! 🌟🚀*

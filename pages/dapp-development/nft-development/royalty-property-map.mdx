@@ -1,0 +1,1114 @@
+# 🎨 NFT 로열티 및 Property Map
+
+Movement Network에서 NFT 로열티 시스템과 Property Map을 구현하는 완전한 가이드입니다. 창작자의 지속적인 수익을 보장하고 NFT 메타데이터를 효율적으로 관리하는 방법을 배워봅니다.
+
+## 🎯 학습 목표
+
+이 섹션을 완료하면:
+- NFT 로열티 시스템을 구현할 수 있습니다
+- Property Map을 활용한 메타데이터 관리를 할 수 있습니다
+- 동적 NFT 속성 업데이트를 구현할 수 있습니다
+- 수수료 분배 시스템을 설계할 수 있습니다
+- 2차 판매 추적 시스템을 구축할 수 있습니다
+
+## 💰 NFT 로열티 시스템
+
+### 로열티의 개념
+NFT 로열티는 창작자가 자신의 작품이 2차 시장에서 거래될 때마다 일정 비율의 수수료를 받는 시스템입니다.
+
+```move
+module nft_royalty::royalty_system {
+    use std::signer;
+    use std::string::{Self, String};
+    use std::vector;
+    use std::option::{Self, Option};
+    use aptos_framework::object::{Self, Object, ConstructorRef};
+    use aptos_framework::fungible_asset::{Self, Metadata};
+    use aptos_framework::primary_fungible_store;
+    use aptos_token_objects::collection;
+    use aptos_token_objects::token;
+    use aptos_token_objects::property_map;
+    
+    /// 로열티 정보
+    struct RoyaltyInfo has key, store, copy, drop {
+        /// 로열티 수신자들과 비율
+        recipients: vector<RoyaltyRecipient>,
+        /// 총 로열티 비율 (basis points, 10000 = 100%)
+        total_rate: u64,
+        /// 로열티 적용 여부
+        enabled: bool,
+        /// 최소 거래 금액 (로열티 적용 기준)
+        minimum_sale_amount: u64,
+        /// 생성 시간
+        created_at: u64
+    }
+    
+    /// 로열티 수신자
+    struct RoyaltyRecipient has store, copy, drop {
+        /// 수신자 주소
+        recipient: address,
+        /// 비율 (basis points)
+        rate: u64,
+        /// 설명
+        description: String
+    }
+    
+    /// NFT 거래 기록
+    struct SaleRecord has key, store {
+        /// NFT 객체
+        nft: Object<token::Token>,
+        /// 거래 기록들
+        sales: vector<SaleInfo>
+    }
+    
+    /// 거래 정보
+    struct SaleInfo has store, copy, drop {
+        /// 판매자
+        seller: address,
+        /// 구매자
+        buyer: address,
+        /// 거래 가격
+        price: u64,
+        /// 지불 토큰
+        payment_token: Object<Metadata>,
+        /// 로열티 지불 금액
+        royalty_paid: u64,
+        /// 거래 시간
+        timestamp: u64,
+        /// 거래 유형 (direct, auction, offer 등)
+        sale_type: String
+    }
+    
+    /// 로열티 풀 (수수료 분배용)
+    struct RoyaltyPool has key {
+        /// 토큰별 누적 로열티
+        accumulated_royalties: simple_map::SimpleMap<Object<Metadata>, u64>,
+        /// 수신자별 청구 가능 금액
+        claimable_amounts: simple_map::SimpleMap<address, simple_map::SimpleMap<Object<Metadata>, u64>>,
+        /// 총 로열티 수집 금액
+        total_collected: u64,
+        /// 총 분배 금액
+        total_distributed: u64
+    }
+    
+    /// 로열티 시스템 초기화
+    public fun initialize_royalty_system(admin: &signer) {
+        move_to(admin, RoyaltyPool {
+            accumulated_royalties: simple_map::create(),
+            claimable_amounts: simple_map::create(),
+            total_collected: 0,
+            total_distributed: 0
+        });
+    }
+    
+    /// NFT에 로열티 설정
+    public fun set_royalty(
+        creator: &signer,
+        nft: Object<token::Token>,
+        recipients: vector<address>,
+        rates: vector<u64>,
+        descriptions: vector<String>,
+        minimum_sale_amount: u64
+    ) {
+        let creator_addr = signer::address_of(creator);
+        
+        // NFT 소유권 확인
+        assert!(object::is_owner(nft, creator_addr), E_NOT_OWNER);
+        
+        // 입력 검증
+        let recipients_len = vector::length(&recipients);
+        assert!(recipients_len == vector::length(&rates), E_MISMATCHED_ARRAYS);
+        assert!(recipients_len == vector::length(&descriptions), E_MISMATCHED_ARRAYS);
+        assert!(recipients_len > 0, E_EMPTY_RECIPIENTS);
+        
+        // 로열티 수신자 구성
+        let royalty_recipients = vector::empty<RoyaltyRecipient>();
+        let mut total_rate = 0u64;
+        let i = 0;
+        
+        while (i < recipients_len) {
+            let recipient = *vector::borrow(&recipients, i);
+            let rate = *vector::borrow(&rates, i);
+            let description = *vector::borrow(&descriptions, i);
+            
+            assert!(rate > 0, E_ZERO_RATE);
+            assert!(rate <= 10000, E_RATE_TOO_HIGH); // 최대 100%
+            
+            vector::push_back(&mut royalty_recipients, RoyaltyRecipient {
+                recipient,
+                rate,
+                description
+            });
+            
+            total_rate = total_rate + rate;
+            i = i + 1;
+        };
+        
+        // 총 로열티 비율 검증 (최대 10% = 1000 basis points)
+        assert!(total_rate <= 1000, E_TOTAL_RATE_TOO_HIGH);
+        
+        // 로열티 정보 저장
+        let royalty_info = RoyaltyInfo {
+            recipients: royalty_recipients,
+            total_rate,
+            enabled: true,
+            minimum_sale_amount,
+            created_at: timestamp::now_seconds()
+        };
+        
+        // NFT 객체에 로열티 정보 저장
+        move_to(&object::generate_signer(&nft), royalty_info);
+    }
+    
+    /// NFT 판매 시 로열티 처리
+    public fun process_sale_royalty(
+        seller: &signer,
+        buyer: &signer,
+        nft: Object<token::Token>,
+        sale_price: u64,
+        payment_token: Object<Metadata>,
+        sale_type: String
+    ) acquires RoyaltyInfo, SaleRecord, RoyaltyPool {
+        let seller_addr = signer::address_of(seller);
+        let buyer_addr = signer::address_of(buyer);
+        
+        // 로열티 정보 확인
+        let nft_addr = object::object_address(&nft);
+        if (!exists<RoyaltyInfo>(nft_addr)) {
+            // 로열티 없음 - 거래 기록만 저장
+            record_sale(nft, seller_addr, buyer_addr, sale_price, payment_token, 0, sale_type);
+            return
+        };
+        
+        let royalty_info = borrow_global<RoyaltyInfo>(nft_addr);
+        
+        // 로열티 비활성화 또는 최소 금액 미달 시
+        if (!royalty_info.enabled || sale_price < royalty_info.minimum_sale_amount) {
+            record_sale(nft, seller_addr, buyer_addr, sale_price, payment_token, 0, sale_type);
+            return
+        };
+        
+        // 로열티 계산 및 분배
+        let total_royalty = (sale_price * royalty_info.total_rate) / 10000;
+        
+        if (total_royalty > 0) {
+            distribute_royalty(seller, payment_token, total_royalty, &royalty_info.recipients);
+        };
+        
+        // 거래 기록
+        record_sale(nft, seller_addr, buyer_addr, sale_price, payment_token, total_royalty, sale_type);
+    }
+    
+    /// 로열티 분배
+    fun distribute_royalty(
+        payer: &signer,
+        payment_token: Object<Metadata>,
+        total_royalty: u64,
+        recipients: &vector<RoyaltyRecipient>
+    ) acquires RoyaltyPool {
+        let pool = borrow_global_mut<RoyaltyPool>(@nft_royalty);
+        
+        let i = 0;
+        let recipients_len = vector::length(recipients);
+        
+        while (i < recipients_len) {
+            let recipient_info = vector::borrow(recipients, i);
+            let recipient_amount = (total_royalty * recipient_info.rate) / 
+                                 calculate_total_rate(recipients);
+            
+            if (recipient_amount > 0) {
+                // 직접 전송 또는 풀에 누적
+                if (can_direct_transfer(recipient_info.recipient, payment_token)) {
+                    // 직접 전송
+                    let royalty_fa = primary_fungible_store::withdraw(payer, payment_token, recipient_amount);
+                    primary_fungible_store::deposit(recipient_info.recipient, royalty_fa);
+                } else {
+                    // 풀에 누적 (나중에 청구)
+                    accumulate_royalty_in_pool(pool, recipient_info.recipient, payment_token, recipient_amount);
+                    
+                    // 지불자에게서 풀로 이전
+                    let royalty_fa = primary_fungible_store::withdraw(payer, payment_token, recipient_amount);
+                    primary_fungible_store::deposit(@nft_royalty, royalty_fa);
+                }
+            };
+            
+            i = i + 1;
+        };
+        
+        pool.total_collected = pool.total_collected + total_royalty;
+    }
+    
+    /// 풀에 로열티 누적
+    fun accumulate_royalty_in_pool(
+        pool: &mut RoyaltyPool,
+        recipient: address,
+        token: Object<Metadata>,
+        amount: u64
+    ) {
+        // 토큰별 누적
+        if (simple_map::contains_key(&pool.accumulated_royalties, &token)) {
+            let current = simple_map::borrow_mut(&mut pool.accumulated_royalties, &token);
+            *current = *current + amount;
+        } else {
+            simple_map::add(&mut pool.accumulated_royalties, token, amount);
+        };
+        
+        // 수신자별 청구 가능 금액
+        if (simple_map::contains_key(&pool.claimable_amounts, &recipient)) {
+            let recipient_map = simple_map::borrow_mut(&mut pool.claimable_amounts, &recipient);
+            if (simple_map::contains_key(recipient_map, &token)) {
+                let current = simple_map::borrow_mut(recipient_map, &token);
+                *current = *current + amount;
+            } else {
+                simple_map::add(recipient_map, token, amount);
+            }
+        } else {
+            let mut new_map = simple_map::create<Object<Metadata>, u64>();
+            simple_map::add(&mut new_map, token, amount);
+            simple_map::add(&mut pool.claimable_amounts, recipient, new_map);
+        }
+    }
+    
+    /// 로열티 청구
+    public fun claim_royalty(
+        recipient: &signer,
+        token: Object<Metadata>
+    ) acquires RoyaltyPool {
+        let recipient_addr = signer::address_of(recipient);
+        let pool = borrow_global_mut<RoyaltyPool>(@nft_royalty);
+        
+        assert!(simple_map::contains_key(&pool.claimable_amounts, &recipient_addr), E_NO_CLAIMABLE_ROYALTY);
+        
+        let recipient_map = simple_map::borrow_mut(&mut pool.claimable_amounts, &recipient_addr);
+        assert!(simple_map::contains_key(recipient_map, &token), E_NO_CLAIMABLE_TOKEN);
+        
+        let claimable_amount = simple_map::remove(recipient_map, &token);
+        assert!(claimable_amount > 0, E_ZERO_CLAIMABLE);
+        
+        // 로열티 전송
+        let royalty_fa = primary_fungible_store::withdraw(&account::create_signer(@nft_royalty), token, claimable_amount);
+        primary_fungible_store::deposit(recipient_addr, royalty_fa);
+        
+        pool.total_distributed = pool.total_distributed + claimable_amount;
+    }
+    
+    /// 거래 기록
+    fun record_sale(
+        nft: Object<token::Token>,
+        seller: address,
+        buyer: address,
+        price: u64,
+        payment_token: Object<Metadata>,
+        royalty_paid: u64,
+        sale_type: String
+    ) acquires SaleRecord {
+        let nft_addr = object::object_address(&nft);
+        
+        let sale_info = SaleInfo {
+            seller,
+            buyer,
+            price,
+            payment_token,
+            royalty_paid,
+            timestamp: timestamp::now_seconds(),
+            sale_type
+        };
+        
+        if (exists<SaleRecord>(nft_addr)) {
+            let record = borrow_global_mut<SaleRecord>(nft_addr);
+            vector::push_back(&mut record.sales, sale_info);
+        } else {
+            let new_record = SaleRecord {
+                nft,
+                sales: vector::singleton(sale_info)
+            };
+            move_to(&object::generate_signer(&nft), new_record);
+        }
+    }
+    
+    // 헬퍼 함수들
+    fun calculate_total_rate(recipients: &vector<RoyaltyRecipient>): u64 {
+        let mut total = 0u64;
+        let i = 0;
+        while (i < vector::length(recipients)) {
+            total = total + vector::borrow(recipients, i).rate;
+            i = i + 1;
+        };
+        total
+    }
+    
+    fun can_direct_transfer(recipient: address, token: Object<Metadata>): bool {
+        primary_fungible_store::is_frozen(recipient, token) == false
+    }
+    
+    // 조회 함수들
+    
+    /// NFT 로열티 정보 조회
+    public fun get_royalty_info(nft: Object<token::Token>): Option<RoyaltyInfo> acquires RoyaltyInfo {
+        let nft_addr = object::object_address(&nft);
+        if (exists<RoyaltyInfo>(nft_addr)) {
+            option::some(*borrow_global<RoyaltyInfo>(nft_addr))
+        } else {
+            option::none()
+        }
+    }
+    
+    /// NFT 거래 기록 조회
+    public fun get_sale_history(nft: Object<token::Token>): vector<SaleInfo> acquires SaleRecord {
+        let nft_addr = object::object_address(&nft);
+        if (exists<SaleRecord>(nft_addr)) {
+            borrow_global<SaleRecord>(nft_addr).sales
+        } else {
+            vector::empty()
+        }
+    }
+    
+    /// 청구 가능한 로열티 조회
+    public fun get_claimable_royalty(
+        recipient: address,
+        token: Object<Metadata>
+    ): u64 acquires RoyaltyPool {
+        let pool = borrow_global<RoyaltyPool>(@nft_royalty);
+        
+        if (simple_map::contains_key(&pool.claimable_amounts, &recipient)) {
+            let recipient_map = simple_map::borrow(&pool.claimable_amounts, &recipient);
+            if (simple_map::contains_key(recipient_map, &token)) {
+                *simple_map::borrow(recipient_map, &token)
+            } else {
+                0
+            }
+        } else {
+            0
+        }
+    }
+    
+    // 에러 코드
+    const E_NOT_OWNER: u64 = 1;
+    const E_MISMATCHED_ARRAYS: u64 = 2;
+    const E_EMPTY_RECIPIENTS: u64 = 3;
+    const E_ZERO_RATE: u64 = 4;
+    const E_RATE_TOO_HIGH: u64 = 5;
+    const E_TOTAL_RATE_TOO_HIGH: u64 = 6;
+    const E_NO_CLAIMABLE_ROYALTY: u64 = 7;
+    const E_NO_CLAIMABLE_TOKEN: u64 = 8;
+    const E_ZERO_CLAIMABLE: u64 = 9;
+}
+```
+
+## 🗺️ Property Map 활용
+
+Property Map은 NFT의 메타데이터를 온체인에서 효율적으로 관리하는 시스템입니다.
+
+```move
+module nft_metadata::property_system {
+    use std::string::{Self, String};
+    use std::vector;
+    use std::option::{Self, Option};
+    use aptos_framework::object::{Self, Object};
+    use aptos_token_objects::token;
+    use aptos_token_objects::property_map::{Self, PropertyMap};
+    use aptos_framework::timestamp;
+    
+    /// NFT 속성 타입
+    struct PropertyType has copy, drop, store {
+        name: String,
+        type_info: String,  // "string", "u64", "bool", "address", "vector<u8>"
+        mutable: bool,
+        required: bool,
+        default_value: Option<vector<u8>>
+    }
+    
+    /// NFT 스키마 (컬렉션별 속성 정의)
+    struct NFTSchema has key, store {
+        collection: Object<collection::Collection>,
+        properties: vector<PropertyType>,
+        version: u64,
+        created_at: u64,
+        updated_at: u64
+    }
+    
+    /// 동적 속성 업데이트 권한
+    struct UpdatePermission has key, store {
+        nft: Object<token::Token>,
+        authorized_updaters: vector<address>,
+        update_rules: vector<UpdateRule>
+    }
+    
+    /// 업데이트 규칙
+    struct UpdateRule has store, copy, drop {
+        property_name: String,
+        updater_role: String,  // "owner", "creator", "admin", "anyone"
+        conditions: vector<String>  // 업데이트 조건들
+    }
+    
+    /// 속성 변경 기록
+    struct PropertyHistory has key, store {
+        nft: Object<token::Token>,
+        changes: vector<PropertyChange>
+    }
+    
+    /// 속성 변경 정보
+    struct PropertyChange has store, copy, drop {
+        property_name: String,
+        old_value: vector<u8>,
+        new_value: vector<u8>,
+        updater: address,
+        timestamp: u64,
+        reason: String
+    }
+    
+    /// NFT 스키마 생성
+    public fun create_nft_schema(
+        creator: &signer,
+        collection: Object<collection::Collection>,
+        property_names: vector<String>,
+        property_types: vector<String>,
+        mutability: vector<bool>,
+        required: vector<bool>
+    ) {
+        let creator_addr = signer::address_of(creator);
+        
+        // 컬렉션 소유권 확인
+        assert!(collection::creator(collection) == creator_addr, E_NOT_COLLECTION_CREATOR);
+        
+        // 입력 검증
+        let len = vector::length(&property_names);
+        assert!(len == vector::length(&property_types), E_MISMATCHED_ARRAYS);
+        assert!(len == vector::length(&mutability), E_MISMATCHED_ARRAYS);
+        assert!(len == vector::length(&required), E_MISMATCHED_ARRAYS);
+        
+        // 속성 타입 구성
+        let mut properties = vector::empty<PropertyType>();
+        let i = 0;
+        
+        while (i < len) {
+            let property = PropertyType {
+                name: *vector::borrow(&property_names, i),
+                type_info: *vector::borrow(&property_types, i),
+                mutable: *vector::borrow(&mutability, i),
+                required: *vector::borrow(&required, i),
+                default_value: option::none()
+            };
+            
+            vector::push_back(&mut properties, property);
+            i = i + 1;
+        };
+        
+        // 스키마 저장
+        let schema = NFTSchema {
+            collection,
+            properties,
+            version: 1,
+            created_at: timestamp::now_seconds(),
+            updated_at: timestamp::now_seconds()
+        };
+        
+        move_to(creator, schema);
+    }
+    
+    /// NFT 속성 설정 (생성 시)
+    public fun set_initial_properties(
+        creator: &signer,
+        nft: Object<token::Token>,
+        property_names: vector<String>,
+        property_values: vector<vector<u8>>,
+        property_types: vector<String>
+    ) acquires NFTSchema {
+        let creator_addr = signer::address_of(creator);
+        let collection = token::collection_object(nft);
+        
+        // 권한 확인
+        assert!(token::creator(nft) == creator_addr, E_NOT_TOKEN_CREATOR);
+        
+        // 스키마 확인
+        assert!(exists<NFTSchema>(creator_addr), E_NO_SCHEMA);
+        let schema = borrow_global<NFTSchema>(creator_addr);
+        
+        // 입력 검증
+        let len = vector::length(&property_names);
+        assert!(len == vector::length(&property_values), E_MISMATCHED_ARRAYS);
+        assert!(len == vector::length(&property_types), E_MISMATCHED_ARRAYS);
+        
+        // Property Map 생성
+        let mut keys = vector::empty<String>();
+        let mut values = vector::empty<vector<u8>>();
+        let mut types = vector::empty<String>();
+        
+        let i = 0;
+        while (i < len) {
+            let name = *vector::borrow(&property_names, i);
+            let value = *vector::borrow(&property_values, i);
+            let type_info = *vector::borrow(&property_types, i);
+            
+            // 스키마 검증
+            validate_property_against_schema(schema, &name, &value, &type_info);
+            
+            vector::push_back(&mut keys, name);
+            vector::push_back(&mut values, value);
+            vector::push_back(&mut types, type_info);
+            
+            i = i + 1;
+        };
+        
+        // Property Map 생성 및 적용
+        let property_map = property_map::init(&keys, &values, &types);
+        property_map::add_typed(&mut property_map, string::utf8(b"created_at"), timestamp::now_seconds());
+        
+        // NFT에 Property Map 적용 (실제 구현에서는 토큰 생성 시 포함)
+        // 여기서는 예시로 별도 리소스에 저장
+        move_to(&object::generate_signer(&nft), PropertyHistory {
+            nft,
+            changes: vector::empty()
+        });
+    }
+    
+    /// NFT 속성 업데이트
+    public fun update_property(
+        updater: &signer,
+        nft: Object<token::Token>,
+        property_name: String,
+        new_value: vector<u8>,
+        reason: String
+    ) acquires UpdatePermission, PropertyHistory, NFTSchema {
+        let updater_addr = signer::address_of(updater);
+        let nft_addr = object::object_address(&nft);
+        
+        // 업데이트 권한 확인
+        if (exists<UpdatePermission>(nft_addr)) {
+            let permission = borrow_global<UpdatePermission>(nft_addr);
+            assert!(can_update_property(permission, updater_addr, &property_name), E_NO_UPDATE_PERMISSION);
+        } else {
+            // 기본 권한: NFT 소유자만 가능
+            assert!(object::is_owner(nft, updater_addr), E_NOT_NFT_OWNER);
+        };
+        
+        // 스키마 검증
+        let collection = token::collection_object(nft);
+        let creator = token::creator(nft);
+        if (exists<NFTSchema>(creator)) {
+            let schema = borrow_global<NFTSchema>(creator);
+            validate_property_mutability(schema, &property_name);
+        };
+        
+        // 현재 값 가져오기
+        let current_property_map = token::property_map(nft);
+        let old_value = if (property_map::contains_key(&current_property_map, &property_name)) {
+            property_map::read_bytes(&current_property_map, &property_name)
+        } else {
+            vector::empty<u8>()
+        };
+        
+        // 속성 업데이트 (실제로는 NFT 메타데이터 업데이트)
+        // 여기서는 변경 기록만 저장
+        record_property_change(nft, property_name, old_value, new_value, updater_addr, reason);
+    }
+    
+    /// 배치 속성 업데이트
+    public fun batch_update_properties(
+        updater: &signer,
+        nft: Object<token::Token>,
+        property_names: vector<String>,
+        new_values: vector<vector<u8>>,
+        reason: String
+    ) acquires UpdatePermission, PropertyHistory, NFTSchema {
+        let len = vector::length(&property_names);
+        assert!(len == vector::length(&new_values), E_MISMATCHED_ARRAYS);
+        
+        let i = 0;
+        while (i < len) {
+            let name = *vector::borrow(&property_names, i);
+            let value = *vector::borrow(&new_values, i);
+            
+            update_property(updater, nft, name, value, reason);
+            i = i + 1;
+        }
+    }
+    
+    /// 조건부 속성 업데이트
+    public fun conditional_update_property(
+        updater: &signer,
+        nft: Object<token::Token>,
+        property_name: String,
+        new_value: vector<u8>,
+        condition: String,  // "if_greater_than", "if_less_than", "if_equals", etc.
+        condition_value: vector<u8>,
+        reason: String
+    ) acquires UpdatePermission, PropertyHistory, NFTSchema {
+        // 조건 확인
+        let current_property_map = token::property_map(nft);
+        if (property_map::contains_key(&current_property_map, &property_name)) {
+            let current_value = property_map::read_bytes(&current_property_map, &property_name);
+            
+            if (evaluate_condition(&current_value, &condition, &condition_value)) {
+                update_property(updater, nft, property_name, new_value, reason);
+            }
+        }
+    }
+    
+    /// 시간 기반 속성 업데이트
+    public fun time_based_update(
+        updater: &signer,
+        nft: Object<token::Token>,
+        property_name: String,
+        new_value: vector<u8>,
+        valid_from: u64,
+        valid_until: u64,
+        reason: String
+    ) acquires UpdatePermission, PropertyHistory, NFTSchema {
+        let current_time = timestamp::now_seconds();
+        
+        assert!(current_time >= valid_from, E_UPDATE_NOT_READY);
+        assert!(current_time <= valid_until, E_UPDATE_EXPIRED);
+        
+        update_property(updater, nft, property_name, new_value, reason);
+    }
+    
+    /// 진화형 NFT 속성 업데이트
+    public fun evolve_nft(
+        owner: &signer,
+        nft: Object<token::Token>,
+        evolution_level: u64,
+        new_properties: vector<String>,
+        new_values: vector<vector<u8>>
+    ) acquires UpdatePermission, PropertyHistory, NFTSchema {
+        let owner_addr = signer::address_of(owner);
+        assert!(object::is_owner(nft, owner_addr), E_NOT_NFT_OWNER);
+        
+        // 현재 레벨 확인
+        let current_property_map = token::property_map(nft);
+        let current_level = if (property_map::contains_key(&current_property_map, &string::utf8(b"level"))) {
+            property_map::read_u64(&current_property_map, &string::utf8(b"level"))
+        } else {
+            0
+        };
+        
+        assert!(evolution_level > current_level, E_INVALID_EVOLUTION);
+        
+        // 레벨 업데이트
+        update_property(owner, nft, string::utf8(b"level"), bcs::to_bytes(&evolution_level), string::utf8(b"evolution"));
+        
+        // 새로운 속성들 업데이트
+        batch_update_properties(owner, nft, new_properties, new_values, string::utf8(b"evolution"));
+    }
+    
+    // 헬퍼 함수들
+    
+    /// 스키마 검증
+    fun validate_property_against_schema(
+        schema: &NFTSchema,
+        property_name: &String,
+        value: &vector<u8>,
+        type_info: &String
+    ) {
+        let i = 0;
+        let found = false;
+        
+        while (i < vector::length(&schema.properties)) {
+            let property_type = vector::borrow(&schema.properties, i);
+            if (&property_type.name == property_name) {
+                assert!(&property_type.type_info == type_info, E_TYPE_MISMATCH);
+                found = true;
+                break
+            };
+            i = i + 1;
+        };
+        
+        assert!(found, E_PROPERTY_NOT_IN_SCHEMA);
+    }
+    
+    /// 속성 변경 가능성 검증
+    fun validate_property_mutability(schema: &NFTSchema, property_name: &String) {
+        let i = 0;
+        while (i < vector::length(&schema.properties)) {
+            let property_type = vector::borrow(&schema.properties, i);
+            if (&property_type.name == property_name) {
+                assert!(property_type.mutable, E_PROPERTY_IMMUTABLE);
+                break
+            };
+            i = i + 1;
+        }
+    }
+    
+    /// 업데이트 권한 확인
+    fun can_update_property(
+        permission: &UpdatePermission,
+        updater: address,
+        property_name: &String
+    ): bool {
+        // 권한자 목록 확인
+        if (vector::contains(&permission.authorized_updaters, &updater)) {
+            return true
+        };
+        
+        // 업데이트 규칙 확인
+        let i = 0;
+        while (i < vector::length(&permission.update_rules)) {
+            let rule = vector::borrow(&permission.update_rules, i);
+            if (&rule.property_name == property_name) {
+                return evaluate_update_rule(rule, updater, permission.nft)
+            };
+            i = i + 1;
+        };
+        
+        false
+    }
+    
+    /// 업데이트 규칙 평가
+    fun evaluate_update_rule(rule: &UpdateRule, updater: address, nft: Object<token::Token>): bool {
+        if (rule.updater_role == string::utf8(b"owner")) {
+            object::is_owner(nft, updater)
+        } else if (rule.updater_role == string::utf8(b"creator")) {
+            token::creator(nft) == updater
+        } else if (rule.updater_role == string::utf8(b"anyone")) {
+            true
+        } else {
+            false
+        }
+    }
+    
+    /// 조건 평가
+    fun evaluate_condition(
+        current_value: &vector<u8>,
+        condition: &String,
+        condition_value: &vector<u8>
+    ): bool {
+        if (condition == &string::utf8(b"if_equals")) {
+            current_value == condition_value
+        } else if (condition == &string::utf8(b"if_not_equals")) {
+            current_value != condition_value
+        } else {
+            // 다른 조건들은 타입별로 구현 필요
+            false
+        }
+    }
+    
+    /// 속성 변경 기록
+    fun record_property_change(
+        nft: Object<token::Token>,
+        property_name: String,
+        old_value: vector<u8>,
+        new_value: vector<u8>,
+        updater: address,
+        reason: String
+    ) acquires PropertyHistory {
+        let nft_addr = object::object_address(&nft);
+        
+        let change = PropertyChange {
+            property_name,
+            old_value,
+            new_value,
+            updater,
+            timestamp: timestamp::now_seconds(),
+            reason
+        };
+        
+        if (exists<PropertyHistory>(nft_addr)) {
+            let history = borrow_global_mut<PropertyHistory>(nft_addr);
+            vector::push_back(&mut history.changes, change);
+        } else {
+            let new_history = PropertyHistory {
+                nft,
+                changes: vector::singleton(change)
+            };
+            move_to(&object::generate_signer(&nft), new_history);
+        }
+    }
+    
+    // 조회 함수들
+    
+    /// NFT 속성 조회
+    public fun get_property_value(nft: Object<token::Token>, property_name: String): Option<vector<u8>> {
+        let property_map = token::property_map(nft);
+        if (property_map::contains_key(&property_map, &property_name)) {
+            option::some(property_map::read_bytes(&property_map, &property_name))
+        } else {
+            option::none()
+        }
+    }
+    
+    /// NFT 모든 속성 조회
+    public fun get_all_properties(nft: Object<token::Token>): PropertyMap {
+        token::property_map(nft)
+    }
+    
+    /// 속성 변경 기록 조회
+    public fun get_property_history(nft: Object<token::Token>): vector<PropertyChange> acquires PropertyHistory {
+        let nft_addr = object::object_address(&nft);
+        if (exists<PropertyHistory>(nft_addr)) {
+            borrow_global<PropertyHistory>(nft_addr).changes
+        } else {
+            vector::empty()
+        }
+    }
+    
+    /// 특정 속성의 변경 기록 조회
+    public fun get_property_change_history(
+        nft: Object<token::Token>,
+        property_name: String
+    ): vector<PropertyChange> acquires PropertyHistory {
+        let all_changes = get_property_history(nft);
+        let mut filtered_changes = vector::empty<PropertyChange>();
+        
+        let i = 0;
+        while (i < vector::length(&all_changes)) {
+            let change = vector::borrow(&all_changes, i);
+            if (change.property_name == property_name) {
+                vector::push_back(&mut filtered_changes, *change);
+            };
+            i = i + 1;
+        };
+        
+        filtered_changes
+    }
+    
+    // 에러 코드
+    const E_NOT_COLLECTION_CREATOR: u64 = 1;
+    const E_NOT_TOKEN_CREATOR: u64 = 2;
+    const E_NOT_NFT_OWNER: u64 = 3;
+    const E_MISMATCHED_ARRAYS: u64 = 4;
+    const E_NO_SCHEMA: u64 = 5;
+    const E_NO_UPDATE_PERMISSION: u64 = 6;
+    const E_PROPERTY_IMMUTABLE: u64 = 7;
+    const E_TYPE_MISMATCH: u64 = 8;
+    const E_PROPERTY_NOT_IN_SCHEMA: u64 = 9;
+    const E_UPDATE_NOT_READY: u64 = 10;
+    const E_UPDATE_EXPIRED: u64 = 11;
+    const E_INVALID_EVOLUTION: u64 = 12;
+}
+```
+
+## 🎮 실전 활용 예시
+
+### 게이밍 NFT 시스템
+```move
+module gaming_nft::character_system {
+    use std::string;
+    use nft_royalty::royalty_system;
+    use nft_metadata::property_system;
+    use aptos_token_objects::token;
+    
+    /// 게임 캐릭터 NFT 생성
+    public fun create_game_character(
+        creator: &signer,
+        collection: Object<collection::Collection>,
+        name: string::String,
+        description: string::String,
+        initial_level: u64,
+        character_class: string::String,
+        rarity: string::String
+    ): Object<token::Token> {
+        // NFT 생성
+        let nft = token::create_named_token(
+            creator,
+            collection,
+            description,
+            name,
+            option::none(),
+            string::utf8(b"https://game.example.com/character/")
+        );
+        
+        // 초기 속성 설정
+        let property_names = vector[
+            string::utf8(b"level"),
+            string::utf8(b"class"),
+            string::utf8(b"rarity"),
+            string::utf8(b"experience"),
+            string::utf8(b"strength"),
+            string::utf8(b"agility"),
+            string::utf8(b"intelligence")
+        ];
+        
+        let property_values = vector[
+            bcs::to_bytes(&initial_level),
+            bcs::to_bytes(&character_class),
+            bcs::to_bytes(&rarity),
+            bcs::to_bytes(&0u64), // 초기 경험치
+            bcs::to_bytes(&get_initial_stat(rarity, string::utf8(b"strength"))),
+            bcs::to_bytes(&get_initial_stat(rarity, string::utf8(b"agility"))),
+            bcs::to_bytes(&get_initial_stat(rarity, string::utf8(b"intelligence")))
+        ];
+        
+        let property_types = vector[
+            string::utf8(b"u64"),
+            string::utf8(b"string"),
+            string::utf8(b"string"),
+            string::utf8(b"u64"),
+            string::utf8(b"u64"),
+            string::utf8(b"u64"),
+            string::utf8(b"u64")
+        ];
+        
+        property_system::set_initial_properties(
+            creator,
+            nft,
+            property_names,
+            property_values,
+            property_types
+        );
+        
+        // 로열티 설정 (5% 창작자, 2% 게임 개발사)
+        royalty_system::set_royalty(
+            creator,
+            nft,
+            vector[signer::address_of(creator), @gaming_nft],
+            vector[500, 200], // 5%, 2%
+            vector[string::utf8(b"Creator Royalty"), string::utf8(b"Game Dev Fee")],
+            1000000 // 최소 거래 금액: 1 APT
+        );
+        
+        nft
+    }
+    
+    /// 캐릭터 레벨업
+    public fun level_up_character(
+        owner: &signer,
+        nft: Object<token::Token>,
+        experience_gained: u64
+    ) {
+        // 경험치 업데이트
+        property_system::update_property(
+            owner,
+            nft,
+            string::utf8(b"experience"),
+            bcs::to_bytes(&experience_gained),
+            string::utf8(b"level_up")
+        );
+        
+        // 레벨 확인 및 업데이트
+        let current_level = get_character_level(nft);
+        let new_level = calculate_level_from_experience(experience_gained);
+        
+        if (new_level > current_level) {
+            property_system::update_property(
+                owner,
+                nft,
+                string::utf8(b"level"),
+                bcs::to_bytes(&new_level),
+                string::utf8(b"level_up")
+            );
+            
+            // 스탯 증가
+            increase_character_stats(owner, nft, new_level - current_level);
+        }
+    }
+    
+    /// 캐릭터 진화
+    public fun evolve_character(
+        owner: &signer,
+        nft: Object<token::Token>,
+        evolution_materials: vector<Object<token::Token>>
+    ) {
+        let current_level = get_character_level(nft);
+        assert!(current_level >= 50, E_INSUFFICIENT_LEVEL);
+        
+        // 진화 재료 확인 및 소각
+        validate_and_burn_materials(owner, evolution_materials);
+        
+        // 진화 속성 추가
+        let evolution_properties = vector[
+            string::utf8(b"evolved"),
+            string::utf8(b"evolution_tier"),
+            string::utf8(b"special_ability")
+        ];
+        
+        let evolution_values = vector[
+            bcs::to_bytes(&true),
+            bcs::to_bytes(&1u64),
+            bcs::to_bytes(&string::utf8(b"Fire Breath"))
+        ];
+        
+        property_system::batch_update_properties(
+            owner,
+            nft,
+            evolution_properties,
+            evolution_values,
+            string::utf8(b"character_evolution")
+        );
+    }
+    
+    // 헬퍼 함수들
+    fun get_initial_stat(rarity: string::String, stat_name: string::String): u64 {
+        if (rarity == string::utf8(b"Legendary")) {
+            100
+        } else if (rarity == string::utf8(b"Epic")) {
+            80
+        } else if (rarity == string::utf8(b"Rare")) {
+            60
+        } else {
+            40
+        }
+    }
+    
+    fun get_character_level(nft: Object<token::Token>): u64 {
+        let level_value = property_system::get_property_value(nft, string::utf8(b"level"));
+        if (option::is_some(&level_value)) {
+            bcs::from_bytes<u64>(*option::borrow(&level_value))
+        } else {
+            1
+        }
+    }
+    
+    fun calculate_level_from_experience(experience: u64): u64 {
+        // 간단한 레벨 계산 공식
+        ((experience / 1000) + 1)
+    }
+    
+    fun increase_character_stats(owner: &signer, nft: Object<token::Token>, level_increase: u64) {
+        let stat_names = vector[
+            string::utf8(b"strength"),
+            string::utf8(b"agility"),
+            string::utf8(b"intelligence")
+        ];
+        
+        let i = 0;
+        while (i < vector::length(&stat_names)) {
+            let stat_name = *vector::borrow(&stat_names, i);
+            let current_value = property_system::get_property_value(nft, stat_name);
+            
+            if (option::is_some(&current_value)) {
+                let current_stat = bcs::from_bytes<u64>(*option::borrow(&current_value));
+                let new_stat = current_stat + (level_increase * 5); // 레벨당 5씩 증가
+                
+                property_system::update_property(
+                    owner,
+                    nft,
+                    stat_name,
+                    bcs::to_bytes(&new_stat),
+                    string::utf8(b"level_up_bonus")
+                );
+            };
+            
+            i = i + 1;
+        }
+    }
+    
+    fun validate_and_burn_materials(
+        owner: &signer,
+        materials: vector<Object<token::Token>>
+    ) {
+        // 진화 재료 검증 및 소각 로직
+        assert!(!vector::is_empty(&materials), E_NO_MATERIALS);
+        // 실제로는 각 재료의 속성을 확인하고 적절한 재료인지 검증
+        // 그리고 소각 처리
+    }
+    
+    const E_INSUFFICIENT_LEVEL: u64 = 1;
+    const E_NO_MATERIALS: u64 = 2;
+}
+```
+
+## 🔗 다음 단계
+
+NFT 로열티와 Property Map을 마스터했다면:
+
+**[NFT 마켓플레이스 구축 →](./nft-marketplace)**
+
+## 📚 참고 자료
+
+- [Aptos Token Objects](https://aptos.dev/standards/digital-asset)
+- [Property Map 가이드](https://aptos.dev/standards/digital-asset#property-map)
+- [NFT 로열티 표준](https://aptos.dev/standards/digital-asset#royalty)
+
+---
+
+*Movement Network에서 진화하는 NFT 생태계를 구축하세요! 🎨✨*

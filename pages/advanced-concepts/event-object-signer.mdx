@@ -1,0 +1,1387 @@
+# 📡 Event, Object, Signer 심화
+
+Movement Network의 핵심 개념인 Event, Object, Signer를 고급 수준에서 활용하는 방법을 학습합니다. 복잡한 이벤트 처리 시스템부터 객체 라이프사이클 관리까지 전문적인 패턴들을 다룹니다.
+
+## 🎯 학습 목표
+
+이 섹션을 완료하면:
+- 복잡한 이벤트 시스템을 설계하고 구현할 수 있습니다
+- Object의 라이프사이클을 완전히 제어할 수 있습니다
+- Signer 패턴의 고급 활용법을 마스터할 수 있습니다
+- 모듈 간 안전한 상호작용을 구현할 수 있습니다
+
+## 📡 고급 이벤트 시스템
+
+### 이벤트 아키텍처 패턴
+```move
+module advanced_events {
+    use std::signer;
+    use std::vector;
+    use std::string::{Self, String};
+    use aptos_framework::event::{Self, EventHandle};
+    use aptos_framework::account;
+    use aptos_framework::timestamp;
+    use aptos_std::smart_table::{Self, SmartTable};
+    
+    /// 계층적 이벤트 시스템
+    struct EventRegistry has key {
+        // 다양한 레벨의 이벤트 핸들
+        system_events: EventHandle<SystemEvent>,
+        user_events: EventHandle<UserEvent>,
+        business_events: EventHandle<BusinessEvent>,
+        error_events: EventHandle<ErrorEvent>,
+        
+        // 이벤트 필터링 및 라우팅
+        event_filters: SmartTable<String, EventFilter>,
+        event_subscribers: SmartTable<String, vector<address>>,
+        
+        // 통계 및 모니터링
+        event_stats: EventStatistics,
+        
+        // 설정
+        max_events_per_type: u64,
+        enable_event_history: bool
+    }
+    
+    /// 시스템 레벨 이벤트
+    struct SystemEvent has drop, store {
+        event_type: u8,        // 0: startup, 1: shutdown, 2: upgrade, 3: maintenance
+        severity: u8,          // 0: info, 1: warning, 2: error, 3: critical
+        message: String,
+        timestamp: u64,
+        module_address: address,
+        additional_data: vector<u8>
+    }
+    
+    /// 사용자 액션 이벤트
+    struct UserEvent has drop, store {
+        user: address,
+        action: String,        // "transfer", "mint", "burn", "approve" 등
+        resource_type: String, // 영향받은 리소스 타입
+        before_state: vector<u8>,  // 이전 상태 (선택적)
+        after_state: vector<u8>,   // 이후 상태 (선택적)
+        transaction_hash: vector<u8>,
+        gas_used: u64,
+        timestamp: u64
+    }
+    
+    /// 비즈니스 로직 이벤트
+    struct BusinessEvent has drop, store {
+        event_category: String,    // "defi", "nft", "governance" 등
+        event_name: String,
+        participants: vector<address>,
+        amounts: vector<u64>,
+        metadata: SmartTable<String, String>,
+        correlation_id: String,    // 관련 이벤트들 연결
+        timestamp: u64
+    }
+    
+    /// 에러 이벤트
+    struct ErrorEvent has drop, store {
+        error_code: u64,
+        error_message: String,
+        failed_function: String,
+        user: address,
+        context: vector<u8>,
+        recovery_suggestions: vector<String>,
+        timestamp: u64
+    }
+    
+    /// 이벤트 필터
+    struct EventFilter has store, drop {
+        filter_type: u8,       // 0: user, 1: event_type, 2: severity, 3: time_range
+        criteria: vector<u8>,  // 필터 조건
+        is_active: bool
+    }
+    
+    /// 이벤트 통계
+    struct EventStatistics has store, drop {
+        total_events: u64,
+        events_by_type: SmartTable<String, u64>,
+        events_by_user: SmartTable<address, u64>,
+        last_reset: u64
+    }
+    
+    /// 이벤트 시스템 초기화
+    public fun initialize_event_system(admin: &signer) {
+        let event_registry = EventRegistry {
+            system_events: account::new_event_handle<SystemEvent>(admin),
+            user_events: account::new_event_handle<UserEvent>(admin),
+            business_events: account::new_event_handle<BusinessEvent>(admin),
+            error_events: account::new_event_handle<ErrorEvent>(admin),
+            
+            event_filters: smart_table::new(),
+            event_subscribers: smart_table::new(),
+            
+            event_stats: EventStatistics {
+                total_events: 0,
+                events_by_type: smart_table::new(),
+                events_by_user: smart_table::new(),
+                last_reset: timestamp::now_seconds()
+            },
+            
+            max_events_per_type: 10000,
+            enable_event_history: true
+        };
+        
+        move_to(admin, event_registry);
+        
+        // 시스템 시작 이벤트 발생
+        emit_system_event(
+            signer::address_of(admin),
+            0, // startup
+            0, // info
+            string::utf8(b"Event system initialized"),
+            vector::empty()
+        );
+    }
+    
+    /// 복합 이벤트 발생 (여러 이벤트를 원자적으로 처리)
+    public fun emit_composite_event(
+        user: &signer,
+        registry_addr: address,
+        events: vector<CompositeEventData>
+    ) acquires EventRegistry {
+        let user_addr = signer::address_of(user);
+        let registry = borrow_global_mut<EventRegistry>(registry_addr);
+        
+        let correlation_id = generate_correlation_id(user_addr);
+        let current_time = timestamp::now_seconds();
+        
+        let i = 0;
+        while (i < vector::length(&events)) {
+            let event_data = vector::borrow(&events, i);
+            
+            match (event_data.event_type) {
+                0 => {  // User Event
+                    let user_event = UserEvent {
+                        user: user_addr,
+                        action: event_data.action,
+                        resource_type: event_data.resource_type,
+                        before_state: event_data.before_state,
+                        after_state: event_data.after_state,
+                        transaction_hash: event_data.transaction_hash,
+                        gas_used: event_data.gas_used,
+                        timestamp: current_time
+                    };
+                    event::emit_event(&mut registry.user_events, user_event);
+                },
+                1 => {  // Business Event
+                    let business_event = BusinessEvent {
+                        event_category: event_data.category,
+                        event_name: event_data.action,
+                        participants: event_data.participants,
+                        amounts: event_data.amounts,
+                        metadata: create_metadata_table(event_data.metadata_pairs),
+                        correlation_id,
+                        timestamp: current_time
+                    };
+                    event::emit_event(&mut registry.business_events, business_event);
+                },
+                _ => {} // 다른 이벤트 타입들
+            };
+            
+            i = i + 1;
+        };
+        
+        // 통계 업데이트
+        update_event_statistics(&mut registry.event_stats, vector::length(&events));
+    }
+    
+    struct CompositeEventData has drop {
+        event_type: u8,
+        action: String,
+        resource_type: String,
+        category: String,
+        participants: vector<address>,
+        amounts: vector<u64>,
+        before_state: vector<u8>,
+        after_state: vector<u8>,
+        transaction_hash: vector<u8>,
+        gas_used: u64,
+        metadata_pairs: vector<(String, String)>
+    }
+    
+    /// 이벤트 구독 시스템
+    public fun subscribe_to_events(
+        subscriber: &signer,
+        registry_addr: address,
+        event_types: vector<String>
+    ) acquires EventRegistry {
+        let subscriber_addr = signer::address_of(subscriber);
+        let registry = borrow_global_mut<EventRegistry>(registry_addr);
+        
+        let i = 0;
+        while (i < vector::length(&event_types)) {
+            let event_type = *vector::borrow(&event_types, i);
+            
+            if (!smart_table::contains(&registry.event_subscribers, event_type)) {
+                smart_table::add(&mut registry.event_subscribers, event_type, vector::empty());
+            };
+            
+            let subscribers = smart_table::borrow_mut(&mut registry.event_subscribers, event_type);
+            if (!vector::contains(subscribers, &subscriber_addr)) {
+                vector::push_back(subscribers, subscriber_addr);
+            };
+            
+            i = i + 1;
+        }
+    }
+    
+    /// 조건부 이벤트 발생
+    public fun emit_conditional_event(
+        user: &signer,
+        registry_addr: address,
+        condition: EventCondition,
+        event_data: UserEvent
+    ) acquires EventRegistry {
+        if (evaluate_event_condition(&condition, &event_data)) {
+            let registry = borrow_global_mut<EventRegistry>(registry_addr);
+            event::emit_event(&mut registry.user_events, event_data);
+        }
+    }
+    
+    struct EventCondition has drop {
+        condition_type: u8,    // 0: amount_threshold, 1: time_range, 2: user_type
+        operator: u8,          // 0: gt, 1: lt, 2: eq, 3: between
+        values: vector<u64>,
+        string_values: vector<String>
+    }
+    
+    /// 이벤트 배치 처리
+    public fun batch_process_events(
+        processor: &signer,
+        registry_addr: address,
+        event_batch: vector<PendingEvent>
+    ) acquires EventRegistry {
+        let registry = borrow_global_mut<EventRegistry>(registry_addr);
+        let processed_count = 0;
+        
+        while (!vector::is_empty(&event_batch) && processed_count < 100) {  // 배치 크기 제한
+            let pending_event = vector::pop_back(&mut event_batch);
+            
+            // 이벤트 유효성 검사
+            if (validate_event(&pending_event)) {
+                process_single_event(registry, pending_event);
+                processed_count = processed_count + 1;
+            }
+        };
+        
+        vector::destroy_empty(event_batch);
+    }
+    
+    struct PendingEvent has drop {
+        event_type: u8,
+        payload: vector<u8>,
+        priority: u8,
+        retry_count: u8,
+        max_retries: u8
+    }
+    
+    // 헬퍼 함수들
+    fun generate_correlation_id(user: address): String {
+        // 사용자 주소와 타임스탬프를 조합한 고유 ID 생성
+        string::utf8(b"corr_id_placeholder")
+    }
+    
+    fun create_metadata_table(pairs: vector<(String, String)>): SmartTable<String, String> {
+        let table = smart_table::new();
+        let i = 0;
+        
+        while (i < vector::length(&pairs)) {
+            let (key, value) = *vector::borrow(&pairs, i);
+            smart_table::add(&mut table, key, value);
+            i = i + 1;
+        };
+        
+        table
+    }
+    
+    fun update_event_statistics(stats: &mut EventStatistics, event_count: u64) {
+        stats.total_events = stats.total_events + event_count;
+    }
+    
+    fun evaluate_event_condition(condition: &EventCondition, event: &UserEvent): bool {
+        // 조건 평가 로직
+        true  // placeholder
+    }
+    
+    fun validate_event(event: &PendingEvent): bool {
+        // 이벤트 유효성 검사
+        true  // placeholder
+    }
+    
+    fun process_single_event(registry: &mut EventRegistry, event: PendingEvent) {
+        // 단일 이벤트 처리
+    }
+    
+    fun emit_system_event(
+        module_addr: address,
+        event_type: u8,
+        severity: u8,
+        message: String,
+        data: vector<u8>
+    ) {
+        // 시스템 이벤트 발생
+    }
+}
+```
+
+## 🎭 고급 Object 관리
+
+### Object 라이프사이클 및 소유권 관리
+```move
+module advanced_objects {
+    use std::signer;
+    use std::vector;
+    use std::option::{Self, Option};
+    use std::string::String;
+    use aptos_framework::object::{Self, Object, ConstructorRef, DeleteRef};
+    use aptos_framework::timestamp;
+    use aptos_std::smart_table::{Self, SmartTable};
+    
+    /// 고급 객체 관리자
+    struct ObjectManager has key {
+        objects: SmartTable<address, ManagedObject>,
+        object_types: SmartTable<String, ObjectTypeConfig>,
+        ownership_history: SmartTable<address, vector<OwnershipRecord>>,
+        lifecycle_hooks: SmartTable<String, vector<HookFunction>>,
+        total_objects: u64
+    }
+    
+    /// 관리되는 객체 정보
+    struct ManagedObject has store, drop {
+        object_address: address,
+        object_type: String,
+        owner: address,
+        created_at: u64,
+        last_modified: u64,
+        status: u8,           // 0: active, 1: suspended, 2: deprecated, 3: deleted
+        metadata: SmartTable<String, String>,
+        access_permissions: vector<address>,
+        lifecycle_stage: u8   // 0: created, 1: initialized, 2: active, 3: archived
+    }
+    
+    /// 객체 타입 설정
+    struct ObjectTypeConfig has store, drop {
+        type_name: String,
+        max_instances: Option<u64>,
+        current_instances: u64,
+        default_permissions: vector<address>,
+        required_capabilities: vector<String>,
+        lifecycle_rules: vector<LifecycleRule>
+    }
+    
+    /// 소유권 기록
+    struct OwnershipRecord has store, drop, copy {
+        previous_owner: address,
+        new_owner: address,
+        transfer_time: u64,
+        transfer_reason: String,
+        approved_by: Option<address>
+    }
+    
+    /// 라이프사이클 규칙
+    struct LifecycleRule has store, drop, copy {
+        stage: u8,            // 적용할 라이프사이클 단계
+        condition: RuleCondition,
+        action: RuleAction,
+        auto_execute: bool
+    }
+    
+    struct RuleCondition has store, drop, copy {
+        condition_type: u8,   // 0: time_based, 1: usage_based, 2: owner_based
+        parameters: vector<u64>
+    }
+    
+    struct RuleAction has store, drop, copy {
+        action_type: u8,      // 0: transfer, 1: delete, 2: archive, 3: notify
+        target: Option<address>,
+        parameters: vector<u64>
+    }
+    
+    /// 훅 함수 정의
+    struct HookFunction has store, drop, copy {
+        hook_type: u8,        // 0: pre_create, 1: post_create, 2: pre_transfer, 3: post_transfer
+        function_name: String,
+        module_address: address
+    }
+    
+    /// 객체 관리자 초기화
+    public fun initialize_object_manager(admin: &signer) {
+        move_to(admin, ObjectManager {
+            objects: smart_table::new(),
+            object_types: smart_table::new(),
+            ownership_history: smart_table::new(),
+            lifecycle_hooks: smart_table::new(),
+            total_objects: 0
+        });
+    }
+    
+    /// 고급 객체 생성 (라이프사이클 관리 포함)
+    public fun create_managed_object<T: key>(
+        creator: &signer,
+        manager_addr: address,
+        object_type: String,
+        initial_metadata: vector<(String, String)>,
+        permissions: vector<address>
+    ): Object<T> acquires ObjectManager {
+        let creator_addr = signer::address_of(creator);
+        let manager = borrow_global_mut<ObjectManager>(manager_addr);
+        
+        // 객체 타입 제한 확인
+        if (smart_table::contains(&manager.object_types, object_type)) {
+            let type_config = smart_table::borrow_mut(&mut manager.object_types, object_type);
+            
+            if (option::is_some(&type_config.max_instances)) {
+                let max = *option::borrow(&type_config.max_instances);
+                assert!(type_config.current_instances < max, E_OBJECT_LIMIT_EXCEEDED);
+            };
+            
+            type_config.current_instances = type_config.current_instances + 1;
+        };
+        
+        // 프리 생성 훅 실행
+        execute_lifecycle_hooks(&manager.lifecycle_hooks, object_type, 0);  // pre_create
+        
+        // 객체 생성
+        let constructor_ref = object::create_object(creator_addr);
+        let object_signer = object::generate_signer(&constructor_ref);
+        let object_addr = signer::address_of(&object_signer);
+        
+        // 객체 정보 등록
+        let current_time = timestamp::now_seconds();
+        let metadata_table = create_metadata_table(initial_metadata);
+        
+        let managed_obj = ManagedObject {
+            object_address: object_addr,
+            object_type,
+            owner: creator_addr,
+            created_at: current_time,
+            last_modified: current_time,
+            status: 0,  // active
+            metadata: metadata_table,
+            access_permissions: permissions,
+            lifecycle_stage: 0  // created
+        };
+        
+        smart_table::add(&mut manager.objects, object_addr, managed_obj);
+        
+        // 소유권 기록 초기화
+        smart_table::add(&mut manager.ownership_history, object_addr, vector::empty());
+        
+        manager.total_objects = manager.total_objects + 1;
+        
+        // 포스트 생성 훅 실행
+        execute_lifecycle_hooks(&manager.lifecycle_hooks, object_type, 1);  // post_create
+        
+        object::object_from_constructor_ref<T>(&constructor_ref)
+    }
+    
+    /// 안전한 객체 전송 (다단계 승인)
+    public fun safe_transfer_object<T: key>(
+        current_owner: &signer,
+        manager_addr: address,
+        object: Object<T>,
+        new_owner: address,
+        transfer_reason: String,
+        require_approval: bool
+    ) acquires ObjectManager {
+        let current_owner_addr = signer::address_of(current_owner);
+        let object_addr = object::object_address(&object);
+        let manager = borrow_global_mut<ObjectManager>(manager_addr);
+        
+        assert!(smart_table::contains(&manager.objects, object_addr), E_OBJECT_NOT_FOUND);
+        let managed_obj = smart_table::borrow_mut(&mut manager.objects, object_addr);
+        
+        // 소유권 확인
+        assert!(managed_obj.owner == current_owner_addr, E_NOT_OWNER);
+        assert!(managed_obj.status == 0, E_OBJECT_NOT_ACTIVE);
+        
+        // 프리 전송 훅 실행
+        execute_lifecycle_hooks(&manager.lifecycle_hooks, managed_obj.object_type, 2);  // pre_transfer
+        
+        if (require_approval) {
+            // 승인 대기 상태로 설정
+            managed_obj.status = 1;  // suspended
+            create_transfer_approval_request(manager, object_addr, new_owner, transfer_reason);
+        } else {
+            // 즉시 전송 실행
+            execute_transfer(manager, object_addr, current_owner_addr, new_owner, transfer_reason);
+        }
+    }
+    
+    /// 전송 승인 처리
+    public fun approve_transfer(
+        approver: &signer,
+        manager_addr: address,
+        object_addr: address
+    ) acquires ObjectManager {
+        let approver_addr = signer::address_of(approver);
+        let manager = borrow_global_mut<ObjectManager>(manager_addr);
+        
+        // 승인 권한 확인 (예: 관리자 또는 지정된 승인자)
+        assert!(has_approval_permission(approver_addr), E_NO_APPROVAL_PERMISSION);
+        
+        let managed_obj = smart_table::borrow(&manager.objects, object_addr);
+        assert!(managed_obj.status == 1, E_NOT_PENDING_APPROVAL);
+        
+        // 승인 처리 로직 구현 필요
+        // execute_pending_transfer(manager, object_addr, approver_addr);
+    }
+    
+    /// 객체 아카이브 (소프트 삭제)
+    public fun archive_object<T: key>(
+        owner: &signer,
+        manager_addr: address,
+        object: Object<T>,
+        archive_reason: String
+    ) acquires ObjectManager {
+        let owner_addr = signer::address_of(owner);
+        let object_addr = object::object_address(&object);
+        let manager = borrow_global_mut<ObjectManager>(manager_addr);
+        
+        assert!(smart_table::contains(&manager.objects, object_addr), E_OBJECT_NOT_FOUND);
+        let managed_obj = smart_table::borrow_mut(&mut manager.objects, object_addr);
+        
+        assert!(managed_obj.owner == owner_addr, E_NOT_OWNER);
+        assert!(managed_obj.status == 0, E_OBJECT_NOT_ACTIVE);
+        
+        // 아카이브 처리
+        managed_obj.status = 3;  // archived
+        managed_obj.lifecycle_stage = 3;  // archived
+        managed_obj.last_modified = timestamp::now_seconds();
+        
+        // 아카이브 메타데이터 추가
+        smart_table::add(&mut managed_obj.metadata, 
+                        string::utf8(b"archive_reason"), 
+                        archive_reason);
+        smart_table::add(&mut managed_obj.metadata, 
+                        string::utf8(b"archived_at"), 
+                        u64_to_string(timestamp::now_seconds()));
+    }
+    
+    /// 라이프사이클 자동화 실행
+    public fun execute_lifecycle_automation(
+        executor: &signer,
+        manager_addr: address
+    ) acquires ObjectManager {
+        let manager = borrow_global_mut<ObjectManager>(manager_addr);
+        let current_time = timestamp::now_seconds();
+        
+        // 모든 객체에 대해 라이프사이클 규칙 확인
+        smart_table::for_each_mut(&mut manager.objects, |object_addr, managed_obj| {
+            let object_type = managed_obj.object_type;
+            
+            if (smart_table::contains(&manager.object_types, object_type)) {
+                let type_config = smart_table::borrow(&manager.object_types, object_type);
+                
+                // 각 라이프사이클 규칙 평가
+                let i = 0;
+                while (i < vector::length(&type_config.lifecycle_rules)) {
+                    let rule = vector::borrow(&type_config.lifecycle_rules, i);
+                    
+                    if (rule.auto_execute && 
+                        managed_obj.lifecycle_stage == rule.stage &&
+                        evaluate_rule_condition(&rule.condition, managed_obj, current_time)) {
+                        
+                        execute_rule_action(&rule.action, managed_obj, *object_addr);
+                    };
+                    
+                    i = i + 1;
+                }
+            }
+        });
+    }
+    
+    /// 객체 쿼리 시스템
+    public fun query_objects(
+        manager_addr: address,
+        filters: vector<ObjectFilter>
+    ): vector<address> acquires ObjectManager {
+        let manager = borrow_global<ObjectManager>(manager_addr);
+        let results = vector::empty();
+        
+        smart_table::for_each_ref(&manager.objects, |object_addr, managed_object| {
+            if (matches_all_filters(managed_object, &filters)) {
+                vector::push_back(&mut results, *object_addr);
+            }
+        });
+        
+        results
+    }
+    
+    struct ObjectFilter has drop {
+        field: String,        // "object_type", "owner", "status", "created_at" 등
+        operator: u8,         // 0: eq, 1: gt, 2: lt, 3: contains
+        value: vector<u8>
+    }
+    
+    // 헬퍼 함수들
+    fun create_metadata_table(pairs: vector<(String, String)>): SmartTable<String, String> {
+        let table = smart_table::new();
+        let i = 0;
+        
+        while (i < vector::length(&pairs)) {
+            let (key, value) = *vector::borrow(&pairs, i);
+            smart_table::add(&mut table, key, value);
+            i = i + 1;
+        };
+        
+        table
+    }
+    
+    fun execute_lifecycle_hooks(
+        hooks: &SmartTable<String, vector<HookFunction>>,
+        object_type: String,
+        hook_type: u8
+    ) {
+        // 라이프사이클 훅 실행
+    }
+    
+    fun create_transfer_approval_request(
+        manager: &mut ObjectManager,
+        object_addr: address,
+        new_owner: address,
+        reason: String
+    ) {
+        // 전송 승인 요청 생성
+    }
+    
+    fun execute_transfer(
+        manager: &mut ObjectManager,
+        object_addr: address,
+        old_owner: address,
+        new_owner: address,
+        reason: String
+    ) {
+        let managed_obj = smart_table::borrow_mut(&mut manager.objects, object_addr);
+        managed_obj.owner = new_owner;
+        managed_obj.last_modified = timestamp::now_seconds();
+        managed_obj.status = 0;  // active
+        
+        // 소유권 기록 추가
+        let ownership_record = OwnershipRecord {
+            previous_owner: old_owner,
+            new_owner,
+            transfer_time: timestamp::now_seconds(),
+            transfer_reason: reason,
+            approved_by: option::none()
+        };
+        
+        let history = smart_table::borrow_mut(&mut manager.ownership_history, object_addr);
+        vector::push_back(history, ownership_record);
+        
+        // 포스트 전송 훅 실행
+        execute_lifecycle_hooks(&manager.lifecycle_hooks, managed_obj.object_type, 3);  // post_transfer
+    }
+    
+    fun has_approval_permission(addr: address): bool {
+        // 승인 권한 확인
+        true  // placeholder
+    }
+    
+    fun evaluate_rule_condition(
+        condition: &RuleCondition,
+        object: &ManagedObject,
+        current_time: u64
+    ): bool {
+        match (condition.condition_type) {
+            0 => {  // time_based
+                let threshold = *vector::borrow(&condition.parameters, 0);
+                current_time - object.created_at >= threshold
+            },
+            1 => {  // usage_based
+                // 사용량 기반 조건 평가
+                true  // placeholder
+            },
+            2 => {  // owner_based
+                // 소유자 기반 조건 평가
+                true  // placeholder
+            },
+            _ => false
+        }
+    }
+    
+    fun execute_rule_action(
+        action: &RuleAction,
+        object: &mut ManagedObject,
+        object_addr: address
+    ) {
+        match (action.action_type) {
+            0 => {  // transfer
+                // 자동 전송 실행
+            },
+            1 => {  // delete
+                object.status = 3;  // deleted
+            },
+            2 => {  // archive
+                object.status = 2;  // archived
+                object.lifecycle_stage = 3;
+            },
+            3 => {  // notify
+                // 알림 발송
+            },
+            _ => {}
+        }
+    }
+    
+    fun matches_all_filters(object: &ManagedObject, filters: &vector<ObjectFilter>): bool {
+        let i = 0;
+        while (i < vector::length(filters)) {
+            let filter = vector::borrow(filters, i);
+            if (!matches_filter(object, filter)) {
+                return false
+            };
+            i = i + 1;
+        };
+        true
+    }
+    
+    fun matches_filter(object: &ManagedObject, filter: &ObjectFilter): bool {
+        // 필터 매칭 로직
+        true  // placeholder
+    }
+    
+    fun u64_to_string(value: u64): String {
+        // u64를 String으로 변환
+        string::utf8(b"placeholder")
+    }
+}
+```
+
+## 👤 고급 Signer 패턴
+
+### 다중 서명자 및 위임 패턴
+```move
+module advanced_signer {
+    use std::signer;
+    use std::vector;
+    use std::option::{Self, Option};
+    use aptos_framework::account::{Self, SignerCapability};
+    use aptos_framework::timestamp;
+    use aptos_std::smart_table::{Self, SmartTable};
+    
+    /// 고급 서명자 관리 시스템
+    struct SignerManager has key {
+        // 서명자 계층 구조
+        signer_hierarchy: SmartTable<address, SignerNode>,
+        
+        // 위임된 서명 권한
+        delegated_capabilities: SmartTable<address, vector<DelegatedSigner>>,
+        
+        // 다중 서명 구성
+        multisig_configs: SmartTable<String, MultiSigConfig>,
+        
+        // 조건부 서명자
+        conditional_signers: SmartTable<address, vector<ConditionalSigner>>,
+        
+        // 서명 세션 관리
+        active_sessions: SmartTable<String, SigningSession>
+    }
+    
+    /// 서명자 노드 (계층 구조)
+    struct SignerNode has store, drop {
+        address: address,
+        level: u8,              // 권한 레벨 (0이 최고)
+        parent: Option<address>,
+        children: vector<address>,
+        permissions: vector<String>,
+        is_active: bool
+    }
+    
+    /// 위임된 서명자
+    struct DelegatedSigner has store, drop {
+        delegate: address,
+        delegator: address,
+        permissions: vector<String>,
+        start_time: u64,
+        end_time: u64,
+        usage_limit: Option<u64>,
+        current_usage: u64,
+        conditions: vector<DelegationCondition>
+    }
+    
+    /// 위임 조건
+    struct DelegationCondition has store, drop, copy {
+        condition_type: u8,     // 0: amount_limit, 1: time_window, 2: resource_type
+        parameters: vector<u64>,
+        string_params: vector<String>
+    }
+    
+    /// 다중 서명 구성
+    struct MultiSigConfig has store, drop {
+        name: String,
+        required_signatures: u64,
+        authorized_signers: vector<address>,
+        signer_weights: SmartTable<address, u64>,  // 가중 서명
+        total_weight: u64,
+        required_weight: u64,
+        timeout_seconds: u64
+    }
+    
+    /// 조건부 서명자
+    struct ConditionalSigner has store, drop {
+        signer_addr: address,
+        conditions: vector<SignerCondition>,
+        fallback_signer: Option<address>,
+        max_attempts: u64,
+        current_attempts: u64
+    }
+    
+    struct SignerCondition has store, drop, copy {
+        condition_type: u8,     // 0: time_based, 1: amount_based, 2: frequency_based
+        operator: u8,           // 0: eq, 1: gt, 2: lt, 3: between
+        threshold: u64,
+        timeframe: Option<u64>
+    }
+    
+    /// 서명 세션
+    struct SigningSession has store, drop {
+        session_id: String,
+        initiator: address,
+        required_signers: vector<address>,
+        received_signatures: SmartTable<address, Signature>,
+        operation_data: vector<u8>,
+        created_at: u64,
+        expires_at: u64,
+        status: u8              // 0: pending, 1: completed, 2: expired, 3: cancelled
+    }
+    
+    struct Signature has store, drop, copy {
+        signer: address,
+        signature_data: vector<u8>,
+        signed_at: u64,
+        conditions_met: bool
+    }
+    
+    /// 서명자 관리 시스템 초기화
+    public fun initialize_signer_manager(admin: &signer) {
+        move_to(admin, SignerManager {
+            signer_hierarchy: smart_table::new(),
+            delegated_capabilities: smart_table::new(),
+            multisig_configs: smart_table::new(),
+            conditional_signers: smart_table::new(),
+            active_sessions: smart_table::new()
+        });
+    }
+    
+    /// 계층적 서명자 등록
+    public fun register_hierarchical_signer(
+        admin: &signer,
+        manager_addr: address,
+        signer_addr: address,
+        level: u8,
+        parent: Option<address>,
+        permissions: vector<String>
+    ) acquires SignerManager {
+        let manager = borrow_global_mut<SignerManager>(manager_addr);
+        
+        // 부모 노드 확인 및 업데이트
+        if (option::is_some(&parent)) {
+            let parent_addr = *option::borrow(&parent);
+            assert!(smart_table::contains(&manager.signer_hierarchy, parent_addr), E_PARENT_NOT_FOUND);
+            
+            let parent_node = smart_table::borrow_mut(&mut manager.signer_hierarchy, parent_addr);
+            vector::push_back(&mut parent_node.children, signer_addr);
+        };
+        
+        let signer_node = SignerNode {
+            address: signer_addr,
+            level,
+            parent,
+            children: vector::empty(),
+            permissions,
+            is_active: true
+        };
+        
+        smart_table::add(&mut manager.signer_hierarchy, signer_addr, signer_node);
+    }
+    
+    /// 조건부 서명 실행
+    public fun conditional_sign<T>(
+        signer: &signer,
+        manager_addr: address,
+        operation: |&signer|T,
+        context: vector<u64>
+    ): T acquires SignerManager {
+        let signer_addr = signer::address_of(signer);
+        let manager = borrow_global_mut<SignerManager>(manager_addr);
+        
+        // 조건부 서명자 확인
+        if (smart_table::contains(&manager.conditional_signers, signer_addr)) {
+            let conditional_signers = smart_table::borrow_mut(&mut manager.conditional_signers, signer_addr);
+            let i = 0;
+            
+            while (i < vector::length(conditional_signers)) {
+                let conditional_signer = vector::borrow_mut(conditional_signers, i);
+                
+                // 최대 시도 횟수 확인
+                if (conditional_signer.current_attempts >= conditional_signer.max_attempts) {
+                    // 폴백 서명자 사용
+                    if (option::is_some(&conditional_signer.fallback_signer)) {
+                        let fallback_addr = *option::borrow(&conditional_signer.fallback_signer);
+                        let fallback_signer = create_signer_from_address(fallback_addr);
+                        return operation(&fallback_signer)
+                    };
+                    
+                    abort E_MAX_ATTEMPTS_EXCEEDED
+                };
+                
+                // 조건 확인
+                if (evaluate_signer_conditions(&conditional_signer.conditions, &context)) {
+                    conditional_signer.current_attempts = conditional_signer.current_attempts + 1;
+                    return operation(signer)
+                };
+                
+                i = i + 1;
+            }
+        };
+        
+        // 일반 서명 실행
+        operation(signer)
+    }
+    
+    /// 다중 서명 세션 시작
+    public fun start_multisig_session(
+        initiator: &signer,
+        manager_addr: address,
+        config_name: String,
+        operation_data: vector<u8>,
+        timeout_seconds: u64
+    ): String acquires SignerManager {
+        let initiator_addr = signer::address_of(initiator);
+        let manager = borrow_global_mut<SignerManager>(manager_addr);
+        
+        assert!(smart_table::contains(&manager.multisig_configs, config_name), E_CONFIG_NOT_FOUND);
+        let config = smart_table::borrow(&manager.multisig_configs, config_name);
+        
+        // 세션 ID 생성
+        let session_id = generate_session_id(initiator_addr, config_name);
+        let current_time = timestamp::now_seconds();
+        
+        let session = SigningSession {
+            session_id,
+            initiator: initiator_addr,
+            required_signers: config.authorized_signers,
+            received_signatures: smart_table::new(),
+            operation_data,
+            created_at: current_time,
+            expires_at: current_time + timeout_seconds,
+            status: 0  // pending
+        };
+        
+        smart_table::add(&mut manager.active_sessions, session_id, session);
+        session_id
+    }
+    
+    /// 다중 서명 세션에 서명
+    public fun sign_multisig_session(
+        signer: &signer,
+        manager_addr: address,
+        session_id: String,
+        signature_data: vector<u8>
+    ): bool acquires SignerManager {
+        let signer_addr = signer::address_of(signer);
+        let manager = borrow_global_mut<SignerManager>(manager_addr);
+        
+        assert!(smart_table::contains(&manager.active_sessions, session_id), E_SESSION_NOT_FOUND);
+        let session = smart_table::borrow_mut(&mut manager.active_sessions, session_id);
+        
+        // 세션 상태 확인
+        assert!(session.status == 0, E_SESSION_NOT_PENDING);
+        assert!(timestamp::now_seconds() <= session.expires_at, E_SESSION_EXPIRED);
+        
+        // 서명자 권한 확인
+        assert!(vector::contains(&session.required_signers, &signer_addr), E_NOT_AUTHORIZED_SIGNER);
+        assert!(!smart_table::contains(&session.received_signatures, signer_addr), E_ALREADY_SIGNED);
+        
+        // 서명 추가
+        let signature = Signature {
+            signer: signer_addr,
+            signature_data,
+            signed_at: timestamp::now_seconds(),
+            conditions_met: true  // 조건 검증 결과
+        };
+        
+        smart_table::add(&mut session.received_signatures, signer_addr, signature);
+        
+        // 완료 조건 확인
+        check_multisig_completion(manager, session_id)
+    }
+    
+    /// 가중 다중 서명 처리
+    public fun weighted_multisig_sign(
+        signer: &signer,
+        manager_addr: address,
+        config_name: String,
+        session_id: String,
+        signature_data: vector<u8>
+    ): bool acquires SignerManager {
+        let signer_addr = signer::address_of(signer);
+        let manager = borrow_global_mut<SignerManager>(manager_addr);
+        
+        assert!(smart_table::contains(&manager.multisig_configs, config_name), E_CONFIG_NOT_FOUND);
+        let config = smart_table::borrow(&manager.multisig_configs, config_name);
+        
+        // 서명자 가중치 확인
+        assert!(smart_table::contains(&config.signer_weights, signer_addr), E_NO_WEIGHT_ASSIGNED);
+        let signer_weight = *smart_table::borrow(&config.signer_weights, signer_addr);
+        
+        // 세션에 서명 추가
+        let success = sign_multisig_session(signer, manager_addr, session_id, signature_data);
+        
+        if (success) {
+            // 가중치 기반 완료 확인
+            check_weighted_completion(manager, session_id, config)
+        } else {
+            false
+        }
+    }
+    
+    /// 서명 위임 생성
+    public fun create_signing_delegation(
+        delegator: &signer,
+        manager_addr: address,
+        delegate: address,
+        permissions: vector<String>,
+        duration_seconds: u64,
+        usage_limit: Option<u64>,
+        conditions: vector<DelegationCondition>
+    ) acquires SignerManager {
+        let delegator_addr = signer::address_of(delegator);
+        let manager = borrow_global_mut<SignerManager>(manager_addr);
+        let current_time = timestamp::now_seconds();
+        
+        let delegated_signer = DelegatedSigner {
+            delegate,
+            delegator: delegator_addr,
+            permissions,
+            start_time: current_time,
+            end_time: current_time + duration_seconds,
+            usage_limit,
+            current_usage: 0,
+            conditions
+        };
+        
+        if (!smart_table::contains(&manager.delegated_capabilities, delegate)) {
+            smart_table::add(&mut manager.delegated_capabilities, delegate, vector::empty());
+        };
+        
+        let delegations = smart_table::borrow_mut(&mut manager.delegated_capabilities, delegate);
+        vector::push_back(delegations, delegated_signer);
+    }
+    
+    /// 위임된 권한으로 서명 실행
+    public fun execute_delegated_signing<T>(
+        delegate: &signer,
+        manager_addr: address,
+        permission: String,
+        operation: |&signer|T,
+        context: vector<u64>
+    ): T acquires SignerManager {
+        let delegate_addr = signer::address_of(delegate);
+        let manager = borrow_global_mut<SignerManager>(manager_addr);
+        
+        assert!(smart_table::contains(&manager.delegated_capabilities, delegate_addr), E_NO_DELEGATION);
+        let delegations = smart_table::borrow_mut(&mut manager.delegated_capabilities, delegate_addr);
+        
+        let i = 0;
+        while (i < vector::length(delegations)) {
+            let delegation = vector::borrow_mut(delegations, i);
+            
+            // 권한 및 시간 확인
+            if (vector::contains(&delegation.permissions, &permission) &&
+                is_delegation_valid(delegation, &context)) {
+                
+                // 사용량 제한 확인
+                if (option::is_some(&delegation.usage_limit)) {
+                    let limit = *option::borrow(&delegation.usage_limit);
+                    assert!(delegation.current_usage < limit, E_USAGE_LIMIT_EXCEEDED);
+                };
+                
+                delegation.current_usage = delegation.current_usage + 1;
+                
+                // 원래 위임자의 서명자로 작업 실행
+                let delegator_signer = create_signer_from_address(delegation.delegator);
+                return operation(&delegator_signer)
+            };
+            
+            i = i + 1;
+        };
+        
+        abort E_NO_VALID_DELEGATION
+    }
+    
+    /// 서명 체인 실행 (연속적 서명)
+    public fun execute_signature_chain<T>(
+        initiator: &signer,
+        manager_addr: address,
+        chain_config: SignatureChain,
+        operation: |vector<&signer>|T
+    ): T acquires SignerManager {
+        let manager = borrow_global<SignerManager>(manager_addr);
+        let signers = vector::empty();
+        
+        let i = 0;
+        while (i < vector::length(&chain_config.required_signers)) {
+            let signer_addr = *vector::borrow(&chain_config.required_signers, i);
+            
+            // 각 단계별 조건 확인
+            let stage_conditions = *vector::borrow(&chain_config.stage_conditions, i);
+            assert!(evaluate_chain_conditions(&stage_conditions), E_CHAIN_CONDITION_FAILED);
+            
+            // 서명자 생성 (실제로는 각 서명자의 승인 필요)
+            let stage_signer = get_authorized_signer(manager, signer_addr, i);
+            vector::push_back(&mut signers, stage_signer);
+            
+            i = i + 1;
+        };
+        
+        operation(signers)
+    }
+    
+    struct SignatureChain has drop {
+        required_signers: vector<address>,
+        stage_conditions: vector<vector<u64>>,
+        execution_order: u8,  // 0: sequential, 1: parallel
+        timeout_per_stage: u64
+    }
+    
+    /// 서명 감사 및 추적
+    public fun audit_signing_activity(
+        auditor: &signer,
+        manager_addr: address,
+        target_signer: address,
+        time_range: (u64, u64)
+    ): SigningAuditReport acquires SignerManager {
+        let manager = borrow_global<SignerManager>(manager_addr);
+        let (start_time, end_time) = time_range;
+        
+        // 서명 활동 수집
+        let activities = vector::empty();
+        
+        // 다중 서명 참여 기록
+        smart_table::for_each_ref(&manager.active_sessions, |session_id, session| {
+            if (session.created_at >= start_time && session.created_at <= end_time) {
+                if (smart_table::contains(&session.received_signatures, target_signer)) {
+                    let signature = smart_table::borrow(&session.received_signatures, target_signer);
+                    let activity = SigningActivity {
+                        activity_type: 0,  // multisig
+                        timestamp: signature.signed_at,
+                        session_id: *session_id,
+                        success: signature.conditions_met
+                    };
+                    vector::push_back(&mut activities, activity);
+                }
+            }
+        });
+        
+        // 위임 활동 기록
+        if (smart_table::contains(&manager.delegated_capabilities, target_signer)) {
+            let delegations = smart_table::borrow(&manager.delegated_capabilities, target_signer);
+            let i = 0;
+            while (i < vector::length(delegations)) {
+                let delegation = vector::borrow(delegations, i);
+                if (delegation.current_usage > 0) {
+                    let activity = SigningActivity {
+                        activity_type: 1,  // delegation
+                        timestamp: delegation.start_time,
+                        session_id: string::utf8(b"delegation"),
+                        success: true
+                    };
+                    vector::push_back(&mut activities, activity);
+                };
+                i = i + 1;
+            }
+        };
+        
+        SigningAuditReport {
+            target_signer,
+            audit_period: time_range,
+            activities,
+            total_activities: vector::length(&activities),
+            risk_assessment: calculate_signing_risk(&activities)
+        }
+    }
+    
+    struct SigningActivity has store, drop {
+        activity_type: u8,     // 0: multisig, 1: delegation, 2: conditional
+        timestamp: u64,
+        session_id: String,
+        success: bool
+    }
+    
+    struct SigningAuditReport has drop {
+        target_signer: address,
+        audit_period: (u64, u64),
+        activities: vector<SigningActivity>,
+        total_activities: u64,
+        risk_assessment: u8    // 0: low, 1: medium, 2: high, 3: critical
+    }
+    
+    // 헬퍼 함수들
+    fun evaluate_signer_conditions(
+        conditions: &vector<SignerCondition>,
+        context: &vector<u64>
+    ): bool {
+        let i = 0;
+        while (i < vector::length(conditions)) {
+            let condition = vector::borrow(conditions, i);
+            if (!evaluate_single_signer_condition(condition, context)) {
+                return false
+            };
+            i = i + 1;
+        };
+        true
+    }
+    
+    fun evaluate_single_signer_condition(
+        condition: &SignerCondition,
+        context: &vector<u64>
+    ): bool {
+        if (condition.condition_type == 0) {  // time_based
+            let current_time = timestamp::now_seconds();
+            match (condition.operator) {
+                1 => current_time > condition.threshold,  // gt
+                2 => current_time < condition.threshold,  // lt
+                _ => current_time == condition.threshold  // eq
+            }
+        } else if (condition.condition_type == 1) {  // amount_based
+            if (vector::is_empty(context)) return false;
+            let amount = *vector::borrow(context, 0);
+            match (condition.operator) {
+                1 => amount > condition.threshold,
+                2 => amount < condition.threshold,
+                _ => amount == condition.threshold
+            }
+        } else {
+            true  // 기타 조건은 통과
+        }
+    }
+    
+    fun generate_session_id(initiator: address, config_name: String): String {
+        // 고유 세션 ID 생성
+        string::utf8(b"session_placeholder")
+    }
+    
+    fun check_multisig_completion(
+        manager: &mut SignerManager,
+        session_id: String
+    ): bool {
+        let session = smart_table::borrow_mut(&mut manager.active_sessions, session_id);
+        let signature_count = smart_table::length(&session.received_signatures);
+        
+        // 필요한 서명 수 확인 (실제로는 설정에서 가져와야 함)
+        let required_count = vector::length(&session.required_signers);
+        
+        if (signature_count >= required_count) {
+            session.status = 1;  // completed
+            true
+        } else {
+            false
+        }
+    }
+    
+    fun check_weighted_completion(
+        manager: &mut SignerManager,
+        session_id: String,
+        config: &MultiSigConfig
+    ): bool {
+        let session = smart_table::borrow(&manager.active_sessions, session_id);
+        let mut total_weight = 0;
+        
+        smart_table::for_each_ref(&session.received_signatures, |signer_addr, _signature| {
+            if (smart_table::contains(&config.signer_weights, *signer_addr)) {
+                let weight = *smart_table::borrow(&config.signer_weights, *signer_addr);
+                total_weight = total_weight + weight;
+            }
+        });
+        
+        total_weight >= config.required_weight
+    }
+    
+    fun is_delegation_valid(
+        delegation: &DelegatedSigner,
+        context: &vector<u64>
+    ): bool {
+        let current_time = timestamp::now_seconds();
+        
+        // 시간 범위 확인
+        if (current_time < delegation.start_time || current_time > delegation.end_time) {
+            return false
+        };
+        
+        // 조건 확인
+        let i = 0;
+        while (i < vector::length(&delegation.conditions)) {
+            let condition = vector::borrow(&delegation.conditions, i);
+            if (!evaluate_delegation_condition(condition, context)) {
+                return false
+            };
+            i = i + 1;
+        };
+        
+        true
+    }
+    
+    fun evaluate_delegation_condition(
+        condition: &DelegationCondition,
+        context: &vector<u64>
+    ): bool {
+        // 위임 조건 평가
+        true  // placeholder
+    }
+    
+    fun evaluate_chain_conditions(conditions: &vector<u64>): bool {
+        // 체인 조건 평가
+        true  // placeholder
+    }
+    
+    fun get_authorized_signer(
+        manager: &SignerManager,
+        signer_addr: address,
+        stage: u64
+    ): &signer {
+        // 승인된 서명자 획득
+        abort 0  // placeholder - 실제로는 적절한 서명자 반환
+    }
+    
+    fun create_signer_from_address(addr: address): signer {
+        // 주소에서 서명자 생성 (실제로는 권한 확인 필요)
+        abort 0  // placeholder
+    }
+    
+    fun calculate_signing_risk(activities: &vector<SigningActivity>): u8 {
+        // 서명 활동 기반 위험도 계산
+        let activity_count = vector::length(activities);
+        
+        if (activity_count > 100) {
+            3  // critical
+        } else if (activity_count > 50) {
+            2  // high
+        } else if (activity_count > 10) {
+            1  // medium
+        } else {
+            0  // low
+        }
+    }
+}
+```
+
+## 🔗 다음 단계
+
+Event, Object, Signer 심화를 마스터했다면:
+
+**[Access Control & Security →](/advanced-concepts/access-control-security)**
+
+## 📚 참고 자료
+
+- [Movement 개발자 포털](https://developer.movementnetwork.xyz/)
+- [Move 이벤트 시스템](https://docs.movementnetwork.xyz/events)
+- [Object 모델 가이드](https://docs.movementnetwork.xyz/objects)
+- [Signer 패턴 문서](https://docs.movementnetwork.xyz/signers)
+
+---
+
+*고급 Move 개념으로 정교하고 안전한 시스템을 구축하세요! 📡🎭*

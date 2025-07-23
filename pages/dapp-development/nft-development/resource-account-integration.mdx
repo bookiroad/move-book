@@ -1,0 +1,1450 @@
+# 🔐 Resource Account 활용
+
+Movement Network에서 Resource Account를 활용한 고급 NFT 관리 시스템을 구축하는 가이드입니다. 자동화된 민팅부터 스케줄 기반 컬렉션 출시까지, 프로그래밍 가능한 NFT 인프라를 마스터합니다.
+
+## 🎯 학습 목표
+
+이 섹션을 완료하면:
+- Resource Account 기반 NFT 관리 시스템을 구축할 수 있습니다
+- 자동화된 민팅 및 배포 시스템을 구현할 수 있습니다
+- 스케줄 기반 컬렉션 출시를 설정할 수 있습니다
+- 화이트리스트 및 복잡한 접근 제어를 관리할 수 있습니다
+- 배치 처리를 통한 가스 최적화를 구현할 수 있습니다
+
+## 🏗️ Resource Account 기반 NFT 시스템
+
+### 프로그래밍 가능한 NFT 관리자
+```move
+module nft_resource_manager::automated_collection {
+    use std::signer;
+    use std::string::{Self, String};
+    use std::vector;
+    use std::option::{Self, Option};
+    use aptos_framework::account::{Self, SignerCapability};
+    use aptos_framework::resource_account;
+    use aptos_framework::timestamp;
+    use aptos_framework::event::{Self, EventHandle};
+    use aptos_framework::coin::{Self, Coin};
+    use aptos_framework::aptos_coin::AptosCoin;
+    use aptos_std::smart_table::{Self, SmartTable};
+    use aptos_token_objects::collection::{Self, Collection};
+    use aptos_token_objects::token::{Self, Token};
+    
+    /// Resource Account 기반 NFT 컬렉션 관리자
+    struct NFTCollectionManager has key {
+        // Resource Account 정보
+        resource_signer_cap: SignerCapability,
+        resource_address: address,
+        
+        // 컬렉션 정보
+        collections: SmartTable<String, ManagedCollection>,
+        
+        // 민팅 설정
+        mint_configs: SmartTable<String, MintingConfig>,
+        
+        // 화이트리스트 관리
+        whitelists: SmartTable<String, SmartTable<address, WhitelistInfo>>,
+        
+        // 스케줄링
+        scheduled_operations: SmartTable<u64, ScheduledOperation>,
+        operation_counter: u64,
+        
+        // 수익 관리
+        revenue_splits: SmartTable<String, RevenueSplit>,
+        collected_revenue: u64,
+        
+        // 이벤트
+        collection_events: EventHandle<CollectionEvent>,
+        mint_events: EventHandle<MintEvent>,
+        
+        // 접근 제어
+        authorized_operators: vector<address>,
+        admin: address
+    }
+    
+    /// 관리되는 컬렉션 정보
+    struct ManagedCollection has store, drop {
+        collection_obj: Object<Collection>,
+        name: String,
+        creator: address,
+        
+        // 공급 관리
+        max_supply: Option<u64>,
+        current_supply: u64,
+        reserved_supply: u64,  // 예약된 수량
+        
+        // 상태 관리
+        is_active: bool,
+        is_public_mint: bool,
+        
+        // 시간 제어
+        mint_start_time: Option<u64>,
+        mint_end_time: Option<u64>,
+        whitelist_start_time: Option<u64>,
+        
+        // 가격 정책
+        public_price: u64,
+        whitelist_price: u64,
+        
+        // 메타데이터
+        base_uri: String,
+        metadata_updatable: bool,
+        
+        // 통계
+        total_minted: u64,
+        whitelist_minted: u64,
+        public_minted: u64
+    }
+    
+    /// 민팅 설정
+    struct MintingConfig has store, drop {
+        collection_name: String,
+        
+        // 개인별 제한
+        max_per_wallet: Option<u64>,
+        max_per_transaction: Option<u64>,
+        
+        // 화이트리스트 설정
+        whitelist_enabled: bool,
+        whitelist_max_per_wallet: Option<u64>,
+        
+        // 자동화 설정
+        auto_reveal: bool,
+        reveal_delay: Option<u64>,
+        
+        // 배치 민팅 설정
+        batch_size: u64,
+        batch_delay: u64,  // 배치 간 지연시간 (초)
+        
+        // 가스 최적화
+        gas_optimization_enabled: bool,
+        preferred_gas_limit: Option<u64>
+    }
+    
+    /// 화이트리스트 정보
+    struct WhitelistInfo has store, drop, copy {
+        user: address,
+        max_mint: u64,
+        current_minted: u64,
+        special_price: Option<u64>,
+        tier: u8,  // 0: basic, 1: premium, 2: vip
+        expires_at: Option<u64>
+    }
+    
+    /// 스케줄된 작업
+    struct ScheduledOperation has store, drop {
+        operation_id: u64,
+        operation_type: u8,  // 0: start_mint, 1: end_mint, 2: reveal, 3: price_change
+        target_collection: String,
+        execution_time: u64,
+        parameters: vector<u8>,  // 직렬화된 매개변수
+        is_executed: bool,
+        created_by: address
+    }
+    
+    /// 수익 분배 설정
+    struct RevenueSplit has store, drop {
+        collection_name: String,
+        recipients: vector<address>,
+        percentages: vector<u64>,  // basis points (10000 = 100%)
+        auto_distribute: bool,
+        minimum_distribution_amount: u64
+    }
+    
+    /// 이벤트 구조체들
+    struct CollectionEvent has drop, store {
+        event_type: String,
+        collection_name: String,
+        timestamp: u64,
+        details: String
+    }
+    
+    struct MintEvent has drop, store {
+        collection_name: String,
+        minter: address,
+        token_id: u64,
+        price_paid: u64,
+        mint_type: String,  // "whitelist" or "public"
+        timestamp: u64
+    }
+    
+    /// NFT 컬렉션 관리자 초기화
+    public fun initialize_collection_manager(
+        admin: &signer,
+        resource_seed: vector<u8>
+    ) {
+        let admin_addr = signer::address_of(admin);
+        
+        // Resource Account 생성
+        let (resource_signer, resource_signer_cap) = account::create_resource_account(
+            admin,
+            resource_seed
+        );
+        let resource_address = signer::address_of(&resource_signer);
+        
+        let manager = NFTCollectionManager {
+            resource_signer_cap,
+            resource_address,
+            collections: smart_table::new(),
+            mint_configs: smart_table::new(),
+            whitelists: smart_table::new(),
+            scheduled_operations: smart_table::new(),
+            operation_counter: 0,
+            revenue_splits: smart_table::new(),
+            collected_revenue: 0,
+            collection_events: account::new_event_handle<CollectionEvent>(&resource_signer),
+            mint_events: account::new_event_handle<MintEvent>(&resource_signer),
+            authorized_operators: vector::singleton(admin_addr),
+            admin: admin_addr
+        };
+        
+        move_to(admin, manager);
+    }
+    
+    /// 자동화된 컬렉션 생성
+    public fun create_automated_collection(
+        admin: &signer,
+        manager_addr: address,
+        collection_name: String,
+        description: String,
+        uri: String,
+        max_supply: Option<u64>,
+        mint_config: MintingConfig,
+        revenue_split: RevenueSplit
+    ) acquires NFTCollectionManager {
+        let admin_addr = signer::address_of(admin);
+        let manager = borrow_global_mut<NFTCollectionManager>(manager_addr);
+        
+        // 권한 확인
+        assert!(
+            admin_addr == manager.admin || 
+            vector::contains(&manager.authorized_operators, &admin_addr),
+            E_NOT_AUTHORIZED
+        );
+        
+        // Resource Account 서명자 생성
+        let resource_signer = account::create_signer_with_capability(&manager.resource_signer_cap);
+        
+        // 컬렉션 생성
+        let collection_obj = collection::create_unlimited_collection(
+            &resource_signer,
+            description,
+            collection_name,
+            option::none(),  // royalty는 나중에 설정
+            uri
+        );
+        
+        // 관리되는 컬렉션 정보 생성
+        let managed_collection = ManagedCollection {
+            collection_obj,
+            name: collection_name,
+            creator: admin_addr,
+            max_supply,
+            current_supply: 0,
+            reserved_supply: 0,
+            is_active: false,
+            is_public_mint: false,
+            mint_start_time: option::none(),
+            mint_end_time: option::none(),
+            whitelist_start_time: option::none(),
+            public_price: 0,
+            whitelist_price: 0,
+            base_uri: uri,
+            metadata_updatable: true,
+            total_minted: 0,
+            whitelist_minted: 0,
+            public_minted: 0
+        };
+        
+        // 저장
+        smart_table::add(&mut manager.collections, collection_name, managed_collection);
+        smart_table::add(&mut manager.mint_configs, collection_name, mint_config);
+        smart_table::add(&mut manager.revenue_splits, collection_name, revenue_split);
+        smart_table::add(&mut manager.whitelists, collection_name, smart_table::new());
+        
+        // 이벤트 발생
+        event::emit_event(&mut manager.collection_events, CollectionEvent {
+            event_type: string::utf8(b"collection_created"),
+            collection_name,
+            timestamp: timestamp::now_seconds(),
+            details: string::utf8(b"Automated collection created with resource account")
+        });
+    }
+    
+    /// 스케줄된 민팅 시작
+    public fun schedule_mint_start(
+        operator: &signer,
+        manager_addr: address,
+        collection_name: String,
+        start_time: u64,
+        public_price: u64,
+        whitelist_price: u64
+    ) acquires NFTCollectionManager {
+        let operator_addr = signer::address_of(operator);
+        let manager = borrow_global_mut<NFTCollectionManager>(manager_addr);
+        
+        // 권한 확인
+        assert!(
+            operator_addr == manager.admin || 
+            vector::contains(&manager.authorized_operators, &operator_addr),
+            E_NOT_AUTHORIZED
+        );
+        
+        // 현재 시간보다 미래여야 함
+        assert!(start_time > timestamp::now_seconds(), E_INVALID_TIME);
+        
+        // 스케줄된 작업 생성
+        let operation_id = manager.operation_counter;
+        manager.operation_counter = manager.operation_counter + 1;
+        
+        let parameters = encode_mint_start_params(public_price, whitelist_price);
+        
+        let scheduled_op = ScheduledOperation {
+            operation_id,
+            operation_type: 0,  // start_mint
+            target_collection: collection_name,
+            execution_time: start_time,
+            parameters,
+            is_executed: false,
+            created_by: operator_addr
+        };
+        
+        smart_table::add(&mut manager.scheduled_operations, operation_id, scheduled_op);
+    }
+    
+    /// 스케줄된 작업 실행 (누구나 호출 가능)
+    public fun execute_scheduled_operations(
+        executor: &signer,
+        manager_addr: address
+    ) acquires NFTCollectionManager {
+        let manager = borrow_global_mut<NFTCollectionManager>(manager_addr);
+        let current_time = timestamp::now_seconds();
+        
+        // Resource Account 서명자 생성
+        let resource_signer = account::create_signer_with_capability(&manager.resource_signer_cap);
+        
+        // 실행 가능한 작업들 찾기
+        let executable_operations = vector::empty<u64>();
+        
+        smart_table::for_each_ref(&manager.scheduled_operations, |op_id, operation| {
+            if (!operation.is_executed && operation.execution_time <= current_time) {
+                vector::push_back(&mut executable_operations, *op_id);
+            }
+        });
+        
+        // 작업들 실행
+        let i = 0;
+        while (i < vector::length(&executable_operations)) {
+            let op_id = *vector::borrow(&executable_operations, i);
+            execute_single_operation(&resource_signer, manager, op_id);
+            i = i + 1;
+        }
+    }
+    
+    /// 화이트리스트 배치 추가
+    public fun batch_add_whitelist(
+        admin: &signer,
+        manager_addr: address,
+        collection_name: String,
+        whitelist_entries: vector<(address, u64, u8, Option<u64>)>  // (user, max_mint, tier, expires_at)
+    ) acquires NFTCollectionManager {
+        let admin_addr = signer::address_of(admin);
+        let manager = borrow_global_mut<NFTCollectionManager>(manager_addr);
+        
+        // 권한 확인
+        assert!(
+            admin_addr == manager.admin || 
+            vector::contains(&manager.authorized_operators, &admin_addr),
+            E_NOT_AUTHORIZED
+        );
+        
+        // 컬렉션 화이트리스트 가져오기
+        let whitelist = smart_table::borrow_mut(&mut manager.whitelists, collection_name);
+        
+        let i = 0;
+        while (i < vector::length(&whitelist_entries)) {
+            let (user, max_mint, tier, expires_at) = *vector::borrow(&whitelist_entries, i);
+            
+            let whitelist_info = WhitelistInfo {
+                user,
+                max_mint,
+                current_minted: 0,
+                special_price: option::none(),
+                tier,
+                expires_at
+            };
+            
+            smart_table::upsert(whitelist, user, whitelist_info);
+            i = i + 1;
+        }
+    }
+    
+    /// 자동화된 NFT 민팅 (화이트리스트 지원)
+    public fun automated_mint(
+        minter: &signer,
+        manager_addr: address,
+        collection_name: String,
+        quantity: u64,
+        payment: Coin<AptosCoin>
+    ) acquires NFTCollectionManager {
+        let minter_addr = signer::address_of(minter);
+        let manager = borrow_global_mut<NFTCollectionManager>(manager_addr);
+        
+        // 컬렉션 확인
+        assert!(smart_table::contains(&manager.collections, collection_name), E_COLLECTION_NOT_FOUND);
+        let collection = smart_table::borrow_mut(&mut manager.collections, collection_name);
+        let mint_config = smart_table::borrow(&manager.mint_configs, collection_name);
+        
+        // 민팅 활성화 확인
+        assert!(collection.is_active, E_MINTING_NOT_ACTIVE);
+        
+        // 시간 확인
+        let current_time = timestamp::now_seconds();
+        if (option::is_some(&collection.mint_start_time)) {
+            assert!(current_time >= *option::borrow(&collection.mint_start_time), E_MINTING_NOT_STARTED);
+        };
+        if (option::is_some(&collection.mint_end_time)) {
+            assert!(current_time <= *option::borrow(&collection.mint_end_time), E_MINTING_ENDED);
+        };
+        
+        // 화이트리스트 확인
+        let (is_whitelisted, whitelist_info) = check_whitelist_status(manager, &collection_name, minter_addr);
+        let mint_type = if (is_whitelisted && 
+                           option::is_some(&collection.whitelist_start_time) && 
+                           current_time >= *option::borrow(&collection.whitelist_start_time)) {
+            string::utf8(b"whitelist")
+        } else if (collection.is_public_mint) {
+            string::utf8(b"public")
+        } else {
+            abort E_MINTING_NOT_AVAILABLE
+        };
+        
+        // 수량 제한 확인
+        validate_mint_limits(mint_config, &whitelist_info, quantity, &mint_type);
+        
+        // 가격 계산 및 결제 확인
+        let price_per_token = if (mint_type == string::utf8(b"whitelist")) {
+            collection.whitelist_price
+        } else {
+            collection.public_price
+        };
+        let total_price = price_per_token * quantity;
+        assert!(coin::value(&payment) >= total_price, E_INSUFFICIENT_PAYMENT);
+        
+        // Resource Account 서명자 생성
+        let resource_signer = account::create_signer_with_capability(&manager.resource_signer_cap);
+        
+        // 배치 민팅 실행
+        batch_mint_tokens(
+            &resource_signer,
+            collection,
+            minter_addr,
+            quantity,
+            mint_config.batch_size
+        );
+        
+        // 결제 처리
+        let treasury_payment = coin::extract(&mut payment, total_price);
+        coin::deposit(manager.resource_address, treasury_payment);
+        
+        // 잔액 반환
+        if (coin::value(&payment) > 0) {
+            coin::deposit(minter_addr, payment);
+        } else {
+            coin::destroy_zero(payment);
+        };
+        
+        manager.collected_revenue = manager.collected_revenue + total_price;
+        
+        // 화이트리스트 정보 업데이트
+        if (is_whitelisted) {
+            update_whitelist_mint_count(manager, &collection_name, minter_addr, quantity);
+        };
+        
+        // 통계 업데이트
+        collection.total_minted = collection.total_minted + quantity;
+        if (mint_type == string::utf8(b"whitelist")) {
+            collection.whitelist_minted = collection.whitelist_minted + quantity;
+        } else {
+            collection.public_minted = collection.public_minted + quantity;
+        };
+        
+        // 이벤트 발생
+        let i = 0;
+        while (i < quantity) {
+            event::emit_event(&mut manager.mint_events, MintEvent {
+                collection_name,
+                minter: minter_addr,
+                token_id: collection.current_supply + i + 1,
+                price_paid: price_per_token,
+                mint_type,
+                timestamp: current_time
+            });
+            i = i + 1;
+        };
+        
+        collection.current_supply = collection.current_supply + quantity;
+        
+        // 자동 공개 처리
+        if (mint_config.auto_reveal) {
+            schedule_auto_reveal(manager, &collection_name, mint_config.reveal_delay);
+        }
+    }
+    
+    /// 수익 자동 분배
+    public fun distribute_revenue(
+        caller: &signer,
+        manager_addr: address,
+        collection_name: String
+    ) acquires NFTCollectionManager {
+        let manager = borrow_global_mut<NFTCollectionManager>(manager_addr);
+        
+        // 수익 분배 설정 확인
+        assert!(smart_table::contains(&manager.revenue_splits, collection_name), E_NO_REVENUE_SPLIT);
+        let revenue_split = smart_table::borrow(&manager.revenue_splits, collection_name);
+        
+        assert!(manager.collected_revenue >= revenue_split.minimum_distribution_amount, E_INSUFFICIENT_REVENUE);
+        
+        // Resource Account 서명자 생성
+        let resource_signer = account::create_signer_with_capability(&manager.resource_signer_cap);
+        
+        // 분배 실행
+        let total_to_distribute = manager.collected_revenue;
+        let i = 0;
+        
+        while (i < vector::length(&revenue_split.recipients)) {
+            let recipient = *vector::borrow(&revenue_split.recipients, i);
+            let percentage = *vector::borrow(&revenue_split.percentages, i);
+            let amount = (total_to_distribute * percentage) / 10000;
+            
+            if (amount > 0) {
+                let payment = coin::withdraw<AptosCoin>(&resource_signer, amount);
+                coin::deposit(recipient, payment);
+            };
+            
+            i = i + 1;
+        };
+        
+        manager.collected_revenue = 0;
+    }
+    
+    /// 배치 토큰 민팅 (가스 최적화)
+    fun batch_mint_tokens(
+        resource_signer: &signer,
+        collection: &mut ManagedCollection,
+        minter: address,
+        total_quantity: u64,
+        batch_size: u64
+    ) {
+        let remaining = total_quantity;
+        let current_token_id = collection.current_supply;
+        
+        while (remaining > 0) {
+            let current_batch_size = if (remaining >= batch_size) {
+                batch_size
+            } else {
+                remaining
+            };
+            
+            // 배치 내에서 개별 토큰 민팅
+            let i = 0;
+            while (i < current_batch_size) {
+                let token_id = current_token_id + i + 1;
+                let token_name = generate_token_name(&collection.name, token_id);
+                let token_uri = generate_token_uri(&collection.base_uri, token_id);
+                
+                // 토큰 민팅
+                let token_obj = token::create_named_token(
+                    resource_signer,
+                    collection::name(collection.collection_obj),
+                    string::utf8(b"Generated NFT"),
+                    token_name,
+                    option::none(), // royalty
+                    token_uri
+                );
+                
+                // 소유권을 민터에게 이전
+                let linear_transfer_ref = object::generate_linear_transfer_ref(&token_obj);
+                object::transfer_with_ref(linear_transfer_ref, minter);
+                
+                i = i + 1;
+            };
+            
+            remaining = remaining - current_batch_size;
+            current_token_id = current_token_id + current_batch_size;
+        }
+    }
+    
+    /// 단일 스케줄된 작업 실행
+    fun execute_single_operation(
+        resource_signer: &signer,
+        manager: &mut NFTCollectionManager,
+        operation_id: u64
+    ) {
+        let operation = smart_table::borrow_mut(&mut manager.scheduled_operations, operation_id);
+        
+        match (operation.operation_type) {
+            0 => {  // start_mint
+                let (public_price, whitelist_price) = decode_mint_start_params(&operation.parameters);
+                execute_mint_start(manager, &operation.target_collection, public_price, whitelist_price);
+            },
+            1 => {  // end_mint
+                execute_mint_end(manager, &operation.target_collection);
+            },
+            2 => {  // reveal
+                execute_reveal(resource_signer, manager, &operation.target_collection);
+            },
+            3 => {  // price_change
+                let (new_public_price, new_whitelist_price) = decode_price_change_params(&operation.parameters);
+                execute_price_change(manager, &operation.target_collection, new_public_price, new_whitelist_price);
+            },
+            _ => {}
+        };
+        
+        operation.is_executed = true;
+        
+        // 이벤트 발생
+        event::emit_event(&mut manager.collection_events, CollectionEvent {
+            event_type: string::utf8(b"scheduled_operation_executed"),
+            collection_name: operation.target_collection,
+            timestamp: timestamp::now_seconds(),
+            details: string::utf8(b"Automated operation executed successfully")
+        });
+    }
+    
+    /// 민팅 시작 실행
+    fun execute_mint_start(
+        manager: &mut NFTCollectionManager,
+        collection_name: &String,
+        public_price: u64,
+        whitelist_price: u64
+    ) {
+        let collection = smart_table::borrow_mut(&mut manager.collections, *collection_name);
+        
+        collection.is_active = true;
+        collection.is_public_mint = true;  // 필요에 따라 조정
+        collection.public_price = public_price;
+        collection.whitelist_price = whitelist_price;
+        collection.mint_start_time = option::some(timestamp::now_seconds());
+    }
+    
+    /// 민팅 종료 실행
+    fun execute_mint_end(
+        manager: &mut NFTCollectionManager,
+        collection_name: &String
+    ) {
+        let collection = smart_table::borrow_mut(&mut manager.collections, *collection_name);
+        
+        collection.is_active = false;
+        collection.is_public_mint = false;
+        collection.mint_end_time = option::some(timestamp::now_seconds());
+    }
+    
+    /// 메타데이터 공개 실행
+    fun execute_reveal(
+        resource_signer: &signer,
+        manager: &mut NFTCollectionManager,
+        collection_name: &String
+    ) {
+        let collection = smart_table::borrow_mut(&mut manager.collections, *collection_name);
+        
+        // 실제로는 메타데이터 URI 업데이트 로직 구현
+        // 예: IPFS에서 실제 메타데이터로 교체
+        
+        collection.metadata_updatable = false;  // 공개 후 업데이트 비활성화
+    }
+    
+    /// 가격 변경 실행
+    fun execute_price_change(
+        manager: &mut NFTCollectionManager,
+        collection_name: &String,
+        new_public_price: u64,
+        new_whitelist_price: u64
+    ) {
+        let collection = smart_table::borrow_mut(&mut manager.collections, *collection_name);
+        
+        collection.public_price = new_public_price;
+        collection.whitelist_price = new_whitelist_price;
+    }
+    
+    /// 화이트리스트 상태 확인
+    fun check_whitelist_status(
+        manager: &NFTCollectionManager,
+        collection_name: &String,
+        user: address
+    ): (bool, Option<WhitelistInfo>) {
+        if (!smart_table::contains(&manager.whitelists, *collection_name)) {
+            return (false, option::none())
+        };
+        
+        let whitelist = smart_table::borrow(&manager.whitelists, *collection_name);
+        
+        if (smart_table::contains(whitelist, user)) {
+            let info = *smart_table::borrow(whitelist, user);
+            
+            // 만료 시간 확인
+            if (option::is_some(&info.expires_at)) {
+                let expires_at = *option::borrow(&info.expires_at);
+                if (timestamp::now_seconds() > expires_at) {
+                    return (false, option::none())
+                }
+            };
+            
+            (true, option::some(info))
+        } else {
+            (false, option::none())
+        }
+    }
+    
+    /// 민팅 제한 검증
+    fun validate_mint_limits(
+        mint_config: &MintingConfig,
+        whitelist_info: &Option<WhitelistInfo>,
+        quantity: u64,
+        mint_type: &String
+    ) {
+        // 트랜잭션당 제한 확인
+        if (option::is_some(&mint_config.max_per_transaction)) {
+            let max_per_tx = *option::borrow(&mint_config.max_per_transaction);
+            assert!(quantity <= max_per_tx, E_EXCEEDS_MAX_PER_TRANSACTION);
+        };
+        
+        // 화이트리스트 사용자 제한 확인
+        if (mint_type == &string::utf8(b"whitelist") && option::is_some(whitelist_info)) {
+            let info = option::borrow(whitelist_info);
+            assert!(info.current_minted + quantity <= info.max_mint, E_EXCEEDS_WHITELIST_LIMIT);
+        }
+    }
+    
+    /// 화이트리스트 민팅 카운트 업데이트
+    fun update_whitelist_mint_count(
+        manager: &mut NFTCollectionManager,
+        collection_name: &String,
+        user: address,
+        quantity: u64
+    ) {
+        let whitelist = smart_table::borrow_mut(&mut manager.whitelists, *collection_name);
+        let info = smart_table::borrow_mut(whitelist, user);
+        info.current_minted = info.current_minted + quantity;
+    }
+    
+    /// 자동 공개 스케줄링
+    fun schedule_auto_reveal(
+        manager: &mut NFTCollectionManager,
+        collection_name: &String,
+        delay: Option<u64>
+    ) {
+        if (option::is_some(&delay)) {
+            let reveal_time = timestamp::now_seconds() + *option::borrow(&delay);
+            let operation_id = manager.operation_counter;
+            manager.operation_counter = manager.operation_counter + 1;
+            
+            let scheduled_op = ScheduledOperation {
+                operation_id,
+                operation_type: 2,  // reveal
+                target_collection: *collection_name,
+                execution_time: reveal_time,
+                parameters: vector::empty(),
+                is_executed: false,
+                created_by: manager.admin
+            };
+            
+            smart_table::add(&mut manager.scheduled_operations, operation_id, scheduled_op);
+        }
+    }
+    
+    // 매개변수 인코딩/디코딩 함수들
+    fun encode_mint_start_params(public_price: u64, whitelist_price: u64): vector<u8> {
+        let params = vector::empty();
+        let public_price_bytes = bcs::to_bytes(&public_price);
+        let whitelist_price_bytes = bcs::to_bytes(&whitelist_price);
+        
+        vector::append(&mut params, public_price_bytes);
+        vector::append(&mut params, whitelist_price_bytes);
+        
+        params
+    }
+    
+    fun decode_mint_start_params(params: &vector<u8>): (u64, u64) {
+        // 실제로는 더 정교한 직렬화/역직렬화 구현 필요
+        (1000000, 500000)  // placeholder
+    }
+    
+    fun decode_price_change_params(params: &vector<u8>): (u64, u64) {
+        // 실제로는 더 정교한 직렬화/역직렬화 구현 필요
+        (2000000, 1000000)  // placeholder
+    }
+    
+    /// 토큰 이름 생성
+    fun generate_token_name(collection_name: &String, token_id: u64): String {
+        let name = *collection_name;
+        string::append_utf8(&mut name, b" #");
+        string::append(&mut name, u64_to_string(token_id));
+        name
+    }
+    
+    /// 토큰 URI 생성
+    fun generate_token_uri(base_uri: &String, token_id: u64): String {
+        let uri = *base_uri;
+        if (!string::is_empty(&uri)) {
+            string::append_utf8(&mut uri, b"/");
+            string::append(&mut uri, u64_to_string(token_id));
+            string::append_utf8(&mut uri, b".json");
+        };
+        uri
+    }
+    
+    /// u64를 String으로 변환
+    fun u64_to_string(value: u64): String {
+        if (value == 0) {
+            return string::utf8(b"0")
+        };
+        
+        let digits = vector::empty();
+        let mut temp = value;
+        
+        while (temp > 0) {
+            let digit = (temp % 10) as u8;
+            vector::push_back(&mut digits, digit + 48); // ASCII '0' = 48
+            temp = temp / 10;
+        };
+        
+        vector::reverse(&mut digits);
+        string::utf8(digits)
+    }
+    
+    // 조회 함수들
+    
+    /// 컬렉션 상태 조회
+    public fun get_collection_status(
+        manager_addr: address,
+        collection_name: String
+    ): CollectionStatus acquires NFTCollectionManager {
+        let manager = borrow_global<NFTCollectionManager>(manager_addr);
+        let collection = smart_table::borrow(&manager.collections, collection_name);
+        
+        CollectionStatus {
+            name: collection.name,
+            is_active: collection.is_active,
+            is_public_mint: collection.is_public_mint,
+            current_supply: collection.current_supply,
+            max_supply: collection.max_supply,
+            public_price: collection.public_price,
+            whitelist_price: collection.whitelist_price,
+            total_minted: collection.total_minted,
+            whitelist_minted: collection.whitelist_minted,
+            public_minted: collection.public_minted,
+            mint_start_time: collection.mint_start_time,
+            mint_end_time: collection.mint_end_time
+        }
+    }
+    
+    /// 사용자 화이트리스트 정보 조회
+    public fun get_user_whitelist_info(
+        manager_addr: address,
+        collection_name: String,
+        user: address
+    ): Option<WhitelistInfo> acquires NFTCollectionManager {
+        let manager = borrow_global<NFTCollectionManager>(manager_addr);
+        let (is_whitelisted, info) = check_whitelist_status(manager, &collection_name, user);
+        
+        if (is_whitelisted) {
+            info
+        } else {
+            option::none()
+        }
+    }
+    
+    /// 스케줄된 작업 목록 조회
+    public fun get_scheduled_operations(
+        manager_addr: address
+    ): vector<ScheduledOperationInfo> acquires NFTCollectionManager {
+        let manager = borrow_global<NFTCollectionManager>(manager_addr);
+        let operations = vector::empty();
+        
+        smart_table::for_each_ref(&manager.scheduled_operations, |op_id, operation| {
+            if (!operation.is_executed) {
+                let op_info = ScheduledOperationInfo {
+                    operation_id: *op_id,
+                    operation_type: operation.operation_type,
+                    target_collection: operation.target_collection,
+                    execution_time: operation.execution_time,
+                    is_executed: operation.is_executed,
+                    created_by: operation.created_by
+                };
+                vector::push_back(&mut operations, op_info);
+            }
+        });
+        
+        operations
+    }
+    
+    // 구조체 정의들
+    
+    struct CollectionStatus has drop {
+        name: String,
+        is_active: bool,
+        is_public_mint: bool,
+        current_supply: u64,
+        max_supply: Option<u64>,
+        public_price: u64,
+        whitelist_price: u64,
+        total_minted: u64,
+        whitelist_minted: u64,
+        public_minted: u64,
+        mint_start_time: Option<u64>,
+        mint_end_time: Option<u64>
+    }
+    
+    struct ScheduledOperationInfo has drop {
+        operation_id: u64,
+        operation_type: u8,
+        target_collection: String,
+        execution_time: u64,
+        is_executed: bool,
+        created_by: address
+    }
+    
+    // 에러 코드
+    const E_NOT_AUTHORIZED: u64 = 1;
+    const E_COLLECTION_NOT_FOUND: u64 = 2;
+    const E_MINTING_NOT_ACTIVE: u64 = 3;
+    const E_MINTING_NOT_STARTED: u64 = 4;
+    const E_MINTING_ENDED: u64 = 5;
+    const E_MINTING_NOT_AVAILABLE: u64 = 6;
+    const E_INSUFFICIENT_PAYMENT: u64 = 7;
+    const E_EXCEEDS_MAX_PER_TRANSACTION: u64 = 8;
+    const E_EXCEEDS_WHITELIST_LIMIT: u64 = 9;
+    const E_INVALID_TIME: u64 = 10;
+    const E_NO_REVENUE_SPLIT: u64 = 11;
+    const E_INSUFFICIENT_REVENUE: u64 = 12;
+}
+```
+
+## 🚀 TypeScript SDK 통합
+
+### Resource Account NFT 관리자 클래스
+```typescript
+import {
+  MovementAccount,
+  MovementClient,
+  Network,
+  HexString,
+  BCS,
+  TxnBuilderTypes
+} from "@movementnetwork/ts-sdk";
+
+interface CollectionConfig {
+  name: string;
+  description: string;
+  uri: string;
+  maxSupply?: number;
+  publicPrice: number;
+  whitelistPrice: number;
+  mintStartTime?: number;
+  mintEndTime?: number;
+  whitelistStartTime?: number;
+}
+
+interface MintingConfig {
+  maxPerWallet?: number;
+  maxPerTransaction?: number;
+  whitelistEnabled: boolean;
+  whitelistMaxPerWallet?: number;
+  autoReveal: boolean;
+  revealDelay?: number;
+  batchSize: number;
+  batchDelay: number;
+  gasOptimizationEnabled: boolean;
+}
+
+interface WhitelistEntry {
+  address: string;
+  maxMint: number;
+  tier: number; // 0: basic, 1: premium, 2: vip
+  expiresAt?: number;
+  specialPrice?: number;
+}
+
+class ResourceAccountNFTManager {
+  private client: MovementClient;
+  private moduleAddress: string;
+  
+  constructor(
+    client: MovementClient,
+    moduleAddress: string
+  ) {
+    this.client = client;
+    this.moduleAddress = moduleAddress;
+  }
+  
+  // Resource Account 기반 NFT 관리자 초기화
+  async initializeManager(
+    admin: MovementAccount,
+    resourceSeed: Uint8Array
+  ): Promise<string> {
+    const payload = {
+      type: "entry_function_payload",
+      function: `${this.moduleAddress}::automated_collection::initialize_collection_manager`,
+      type_arguments: [],
+      arguments: [
+        Array.from(resourceSeed)
+      ]
+    };
+    
+    const txn = await this.client.generateTransaction(admin.address(), payload);
+    const signedTxn = await this.client.signTransaction(admin, txn);
+    const response = await this.client.submitTransaction(signedTxn);
+    
+    await this.client.waitForTransaction(response.hash);
+    return response.hash;
+  }
+  
+  // 자동화된 컬렉션 생성
+  async createAutomatedCollection(
+    admin: MovementAccount,
+    managerAddress: string,
+    config: CollectionConfig,
+    mintConfig: MintingConfig,
+    revenueSplit: {
+      recipients: string[];
+      percentages: number[]; // basis points
+      autoDistribute: boolean;
+      minimumAmount: number;
+    }
+  ): Promise<string> {
+    // MintingConfig 직렬화
+    const mintConfigSerialized = this.serializeMintingConfig(mintConfig);
+    
+    // RevenueSplit 직렬화
+    const revenueSplitSerialized = this.serializeRevenueSplit(revenueSplit);
+    
+    const payload = {
+      type: "entry_function_payload",
+      function: `${this.moduleAddress}::automated_collection::create_automated_collection`,
+      type_arguments: [],
+      arguments: [
+        managerAddress,
+        config.name,
+        config.description,
+        config.uri,
+        config.maxSupply ? [config.maxSupply] : [],
+        mintConfigSerialized,
+        revenueSplitSerialized
+      ]
+    };
+    
+    const txn = await this.client.generateTransaction(admin.address(), payload);
+    const signedTxn = await this.client.signTransaction(admin, txn);
+    const response = await this.client.submitTransaction(signedTxn);
+    
+    await this.client.waitForTransaction(response.hash);
+    return response.hash;
+  }
+  
+  // 스케줄된 민팅 시작 설정
+  async scheduleMintStart(
+    operator: MovementAccount,
+    managerAddress: string,
+    collectionName: string,
+    startTime: number,
+    publicPrice: number,
+    whitelistPrice: number
+  ): Promise<string> {
+    const payload = {
+      type: "entry_function_payload",
+      function: `${this.moduleAddress}::automated_collection::schedule_mint_start`,
+      type_arguments: [],
+      arguments: [
+        managerAddress,
+        collectionName,
+        startTime.toString(),
+        publicPrice.toString(),
+        whitelistPrice.toString()
+      ]
+    };
+    
+    const txn = await this.client.generateTransaction(operator.address(), payload);
+    const signedTxn = await this.client.signTransaction(operator, txn);
+    const response = await this.client.submitTransaction(signedTxn);
+    
+    await this.client.waitForTransaction(response.hash);
+    return response.hash;
+  }
+  
+  // 화이트리스트 배치 추가
+  async batchAddWhitelist(
+    admin: MovementAccount,
+    managerAddress: string,
+    collectionName: string,
+    entries: WhitelistEntry[]
+  ): Promise<string> {
+    // 배치 크기 제한 (가스 제한 고려)
+    const BATCH_SIZE = 100;
+    const batches = this.createBatches(entries, BATCH_SIZE);
+    
+    let lastTxHash = "";
+    
+    for (const batch of batches) {
+      const whitelistEntries = batch.map(entry => [
+        entry.address,
+        entry.maxMint.toString(),
+        entry.tier.toString(),
+        entry.expiresAt ? [entry.expiresAt.toString()] : []
+      ]);
+      
+      const payload = {
+        type: "entry_function_payload",
+        function: `${this.moduleAddress}::automated_collection::batch_add_whitelist`,
+        type_arguments: [],
+        arguments: [
+          managerAddress,
+          collectionName,
+          whitelistEntries
+        ]
+      };
+      
+      const txn = await this.client.generateTransaction(admin.address(), payload);
+      const signedTxn = await this.client.signTransaction(admin, txn);
+      const response = await this.client.submitTransaction(signedTxn);
+      
+      await this.client.waitForTransaction(response.hash);
+      lastTxHash = response.hash;
+      
+      // 배치 간 지연 (네트워크 부하 방지)
+      if (batches.indexOf(batch) < batches.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    }
+    
+    return lastTxHash;
+  }
+  
+  // 자동화된 NFT 민팅
+  async automatedMint(
+    minter: MovementAccount,
+    managerAddress: string,
+    collectionName: string,
+    quantity: number,
+    paymentAmount: number
+  ): Promise<string> {
+    const payload = {
+      type: "entry_function_payload",
+      function: `${this.moduleAddress}::automated_collection::automated_mint`,
+      type_arguments: [],
+      arguments: [
+        managerAddress,
+        collectionName,
+        quantity.toString(),
+        paymentAmount.toString()
+      ]
+    };
+    
+    const txn = await this.client.generateTransaction(minter.address(), payload);
+    const signedTxn = await this.client.signTransaction(minter, txn);
+    const response = await this.client.submitTransaction(signedTxn);
+    
+    await this.client.waitForTransaction(response.hash);
+    return response.hash;
+  }
+  
+  // 스케줄된 작업 실행 (누구나 호출 가능)
+  async executeScheduledOperations(
+    executor: MovementAccount,
+    managerAddress: string
+  ): Promise<string> {
+    const payload = {
+      type: "entry_function_payload",
+      function: `${this.moduleAddress}::automated_collection::execute_scheduled_operations`,
+      type_arguments: [],
+      arguments: [managerAddress]
+    };
+    
+    const txn = await this.client.generateTransaction(executor.address(), payload);
+    const signedTxn = await this.client.signTransaction(executor, txn);
+    const response = await this.client.submitTransaction(signedTxn);
+    
+    await this.client.waitForTransaction(response.hash);
+    return response.hash;
+  }
+  
+  // 수익 분배
+  async distributeRevenue(
+    caller: MovementAccount,
+    managerAddress: string,
+    collectionName: string
+  ): Promise<string> {
+    const payload = {
+      type: "entry_function_payload",
+      function: `${this.moduleAddress}::automated_collection::distribute_revenue`,
+      type_arguments: [],
+      arguments: [
+        managerAddress,
+        collectionName
+      ]
+    };
+    
+    const txn = await this.client.generateTransaction(caller.address(), payload);
+    const signedTxn = await this.client.signTransaction(caller, txn);
+    const response = await this.client.submitTransaction(signedTxn);
+    
+    await this.client.waitForTransaction(response.hash);
+    return response.hash;
+  }
+  
+  // 컬렉션 상태 조회
+  async getCollectionStatus(
+    managerAddress: string,
+    collectionName: string
+  ): Promise<any> {
+    try {
+      const resource = await this.client.getAccountResource(
+        managerAddress,
+        `${this.moduleAddress}::automated_collection::NFTCollectionManager`
+      );
+      
+      // 실제로는 더 정교한 파싱 로직 필요
+      return this.parseCollectionStatus(resource.data, collectionName);
+    } catch (error) {
+      throw new Error(`Failed to get collection status: ${error.message}`);
+    }
+  }
+  
+  // 사용자 화이트리스트 정보 조회
+  async getUserWhitelistInfo(
+    managerAddress: string,
+    collectionName: string,
+    userAddress: string
+  ): Promise<WhitelistEntry | null> {
+    const payload = {
+      function: `${this.moduleAddress}::automated_collection::get_user_whitelist_info`,
+      type_arguments: [],
+      arguments: [
+        managerAddress,
+        collectionName,
+        userAddress
+      ]
+    };
+    
+    try {
+      const result = await this.client.view(payload);
+      return result.length > 0 ? this.parseWhitelistInfo(result[0]) : null;
+    } catch (error) {
+      console.error("Failed to get whitelist info:", error);
+      return null;
+    }
+  }
+  
+  // 스케줄된 작업 목록 조회
+  async getScheduledOperations(managerAddress: string): Promise<any[]> {
+    const payload = {
+      function: `${this.moduleAddress}::automated_collection::get_scheduled_operations`,
+      type_arguments: [],
+      arguments: [managerAddress]
+    };
+    
+    try {
+      const result = await this.client.view(payload);
+      return result.map(op => this.parseScheduledOperation(op));
+    } catch (error) {
+      console.error("Failed to get scheduled operations:", error);
+      return [];
+    }
+  }
+  
+  // 자동화된 민팅 모니터링 및 실행
+  async startAutomatedMonitoring(
+    executorAccount: MovementAccount,
+    managerAddresses: string[],
+    checkInterval: number = 30000 // 30초
+  ): Promise<void> {
+    console.log("Starting automated monitoring...");
+    
+    const executeOperations = async () => {
+      for (const managerAddress of managerAddresses) {
+        try {
+          const pendingOps = await this.getScheduledOperations(managerAddress);
+          const executableOps = pendingOps.filter(
+            op => !op.is_executed && op.execution_time <= Date.now() / 1000
+          );
+          
+          if (executableOps.length > 0) {
+            console.log(`Executing ${executableOps.length} operations for ${managerAddress}`);
+            await this.executeScheduledOperations(executorAccount, managerAddress);
+          }
+        } catch (error) {
+          console.error(`Error executing operations for ${managerAddress}:`, error);
+        }
+      }
+    };
+    
+    // 초기 실행
+    await executeOperations();
+    
+    // 주기적 실행
+    setInterval(executeOperations, checkInterval);
+  }
+  
+  // 유틸리티 함수들
+  
+  private serializeMintingConfig(config: MintingConfig): any[] {
+    return [
+      config.maxPerWallet || 0,
+      config.maxPerTransaction || 0,
+      config.whitelistEnabled,
+      config.whitelistMaxPerWallet || 0,
+      config.autoReveal,
+      config.revealDelay || 0,
+      config.batchSize,
+      config.batchDelay,
+      config.gasOptimizationEnabled
+    ];
+  }
+  
+  private serializeRevenueSplit(split: any): any[] {
+    return [
+      split.recipients,
+      split.percentages,
+      split.autoDistribute,
+      split.minimumAmount.toString()
+    ];
+  }
+  
+  private createBatches<T>(items: T[], batchSize: number): T[][] {
+    const batches = [];
+    for (let i = 0; i < items.length; i += batchSize) {
+      batches.push(items.slice(i, i + batchSize));
+    }
+    return batches;
+  }
+  
+  private parseCollectionStatus(data: any, collectionName: string): any {
+    // 실제 구현에서는 Move 구조체를 TypeScript 객체로 변환
+    return {
+      name: collectionName,
+      isActive: true,
+      currentSupply: 0,
+      maxSupply: null,
+      publicPrice: 0,
+      whitelistPrice: 0
+      // ... 기타 필드들
+    };
+  }
+  
+  private parseWhitelistInfo(data: any): WhitelistEntry {
+    return {
+      address: data.user,
+      maxMint: parseInt(data.max_mint),
+      tier: parseInt(data.tier),
+      expiresAt: data.expires_at ? parseInt(data.expires_at) : undefined
+    };
+  }
+  
+  private parseScheduledOperation(data: any): any {
+    return {
+      operationId: parseInt(data.operation_id),
+      operationType: parseInt(data.operation_type),
+      targetCollection: data.target_collection,
+      executionTime: parseInt(data.execution_time),
+      isExecuted: data.is_executed,
+      createdBy: data.created_by
+    };
+  }
+}
+
+// 사용 예시
+async function setupAutomatedNFTCollection() {
+  const client = new MovementClient({ network: Network.DEVNET });
+  const admin = new MovementAccount();
+  const nftManager = new ResourceAccountNFTManager(
+    client,
+    "0x1" // 실제 모듈 주소
+  );
+  
+  // 1. NFT 관리자 초기화
+  const resourceSeed = new TextEncoder().encode("my-nft-collection-v1");
+  await nftManager.initializeManager(admin, resourceSeed);
+  
+  // 2. 자동화된 컬렉션 생성
+  const collectionConfig: CollectionConfig = {
+    name: "Cosmic Dragons",
+    description: "A collection of mystical dragons",
+    uri: "ipfs://QmYourCollectionHash",
+    maxSupply: 10000,
+    publicPrice: 1000000, // 0.01 MOVE
+    whitelistPrice: 500000, // 0.005 MOVE
+    mintStartTime: Math.floor(Date.now() / 1000) + 3600, // 1시간 후
+    mintEndTime: Math.floor(Date.now() / 1000) + 86400 * 7 // 7일 후
+  };
+  
+  const mintConfig: MintingConfig = {
+    maxPerWallet: 10,
+    maxPerTransaction: 5,
+    whitelistEnabled: true,
+    whitelistMaxPerWallet: 3,
+    autoReveal: true,
+    revealDelay: 3600, // 1시간 후 공개
+    batchSize: 10,
+    batchDelay: 1,
+    gasOptimizationEnabled: true
+  };
+  
+  const revenueSplit = {
+    recipients: [admin.address().hex()],
+    percentages: [10000], // 100%
+    autoDistribute: false,
+    minimumAmount: 1000000 // 0.01 MOVE
+  };
+  
+  await nftManager.createAutomatedCollection(
+    admin,
+    admin.address().hex(),
+    collectionConfig,
+    mintConfig,
+    revenueSplit
+  );
+  
+  // 3. 화이트리스트 추가
+  const whitelistEntries: WhitelistEntry[] = [
+    {
+      address: "0x123...",
+      maxMint: 3,
+      tier: 2, // VIP
+      expiresAt: Math.floor(Date.now() / 1000) + 86400 * 30 // 30일
+    }
+    // ... 더 많은 항목들
+  ];
+  
+  await nftManager.batchAddWhitelist(
+    admin,
+    admin.address().hex(),
+    "Cosmic Dragons",
+    whitelistEntries
+  );
+  
+  // 4. 자동화된 모니터링 시작
+  await nftManager.startAutomatedMonitoring(
+    admin,
+    [admin.address().hex()],
+    30000 // 30초마다 체크
+  );
+  
+  console.log("Automated NFT collection setup complete!");
+}
+```
+
+## 🔗 다음 단계
+
+Resource Account 활용을 마스터했다면:
+
+**[Royalty & Property Map →](/dapp-development/nft-development/royalty-property-map)**
+
+## 📚 참고 자료
+
+- [Movement 개발자 포털](https://developer.movementnetwork.xyz/)
+- [Resource Account 가이드](https://docs.movementnetwork.xyz/resource-accounts)
+- [Automated Systems 패턴](https://docs.movementnetwork.xyz/automation-patterns)
+
+---
+
+*Movement Network에서 완전 자동화된 NFT 시스템을 구축하세요! 🔐🚀*

@@ -1,0 +1,476 @@
+# 🧩 NFT 개발
+
+Movement Network에서 디지털 자산과 컬렉션을 구축하는 완전한 가이드입니다. Move 언어의 리소스 모델을 활용한 안전하고 혁신적인 NFT 시스템을 마스터합니다.
+
+## 🎯 학습 목표
+
+이 섹션을 완료하면:
+- Movement NFT 표준과 아키텍처를 완전히 이해할 수 있습니다
+- 확장 가능한 NFT 컬렉션을 설계하고 구현할 수 있습니다
+- 메타데이터 관리와 IPFS 통합을 마스터할 수 있습니다
+- 로열티 시스템과 동적 속성을 구현할 수 있습니다
+- 완전한 NFT 마켓플레이스를 구축할 수 있습니다
+
+## 💎 Movement NFT의 특별함
+
+### Move 언어의 NFT 장점
+```
+🔒 안전성 (Safety)
+├── 리소스 모델로 자산 보호
+├── 컴파일 타임 안전성 검증
+├── 이중 지출 방지 보장
+└── 메모리 안전성 자동 관리
+
+⚡ 성능 (Performance)
+├── 높은 처리량 (10,000+ TPS)
+├── 낮은 지연시간 (< 100ms)
+├── 경제적인 가스비
+└── 즉시 완결성
+
+🔄 유연성 (Flexibility)
+├── 동적 NFT 지원
+├── 진화하는 메타데이터
+├── 복합 소유권 구조
+└── 프로그래밍 가능한 로열티
+```
+
+### Movement vs 다른 체인 NFT 비교
+```typescript
+// Movement NFT 생태계의 고유한 특징
+const MOVEMENT_NFT_ECOSYSTEM = {
+  technical: {
+    language: "Move - 리소스 중심 언어",
+    safety: "컴파일 타임 자산 보호",
+    performance: "Sub-second finality",
+    cost: "Low gas fees for minting/trading"
+  },
+  
+  features: {
+    dynamicNFT: "Native support for evolving NFTs",
+    composability: "Easy integration with DeFi protocols",
+    royalties: "Programmable royalty distribution",
+    metadata: "On-chain and off-chain flexibility"
+  },
+  
+  ecosystem: {
+    compatibility: "EVM compatibility for easy migration",
+    tools: "Rich developer tooling",
+    infrastructure: "Mature indexing and API services",
+    community: "Growing creator and developer community"
+  }
+};
+```
+
+## 🗺️ NFT 개발 로드맵
+
+### 학습 경로
+```
+📚 NFT 개발 마스터리 여정:
+
+1️⃣ 기초 이해 (1주차)
+   ├── NFT 개념과 Move 리소스 모델
+   ├── Movement NFT 표준 학습
+   ├── 기본 컬렉션 설계 패턴
+   └── 간단한 NFT 민팅 구현
+
+2️⃣ 표준과 메타데이터 (2주차)
+   ├── Token Standard 심화 이해
+   ├── JSON 메타데이터 최적화
+   ├── IPFS 통합 및 관리
+   └── 온체인 vs 오프체인 전략
+
+3️⃣ 고급 기능 (3주차)
+   ├── Resource Account 활용
+   ├── 자동화된 민팅 시스템
+   ├── 배치 처리 최적화
+   └── 권한 관리 패턴
+
+4️⃣ 경제 모델 (4주차)
+   ├── 로열티 시스템 구현
+   ├── 동적 속성 관리
+   ├── 진화하는 NFT 설계
+   └── 게임 아이템 특성
+
+5️⃣ 실전 프로젝트 (5-6주차)
+   ├── 완전한 NFT 마켓플레이스
+   ├── 경매 및 고정가 판매
+   ├── 사용자 인터페이스 구축
+   └── 프로덕션 배포
+```
+
+### 난이도별 프로젝트
+```
+🟢 초급 프로젝트
+├── 개인 디지털 아트 컬렉션
+├── 간단한 PFP (Profile Picture) NFT
+├── 기본 멤버십 카드 NFT
+└── 정적 메타데이터 컬렉션
+
+🟡 중급 프로젝트
+├── 제너러티브 아트 컬렉션
+├── 유틸리티 NFT (할인, 접근권)
+├── 기본 로열티 시스템
+└── IPFS 통합 마켓플레이스
+
+🔴 고급 프로젝트
+├── 진화형 게임 캐릭터 NFT
+├── 복합 로열티 분배 시스템
+├── 크로스체인 NFT 브리지
+└── AI 생성 동적 NFT
+```
+
+## 🏗️ 핵심 아키텍처 패턴
+
+### 1. 기본 NFT 구조
+```move
+// Movement NFT의 핵심 구조
+module nft_framework::token {
+    use aptos_framework::object::{Self, Object};
+    
+    /// NFT 토큰의 기본 구조
+    struct Token has key {
+        // 기본 메타데이터
+        name: String,
+        description: String,
+        uri: String,
+        
+        // 소유권 정보
+        creator: address,
+        
+        // 확장 가능한 속성
+        property_map: PropertyMap,
+        
+        // 로열티 정보
+        royalty: Option<Royalty>
+    }
+    
+    /// 컬렉션 관리
+    struct Collection has key {
+        name: String,
+        description: String,
+        creator: address,
+        maximum_supply: Option<u64>,
+        mutability_config: MutabilityConfig
+    }
+}
+```
+
+### 2. 확장 가능한 메타데이터 시스템
+```move
+// 동적 속성 관리
+module nft_framework::property_map {
+    use std::string::String;
+    use aptos_std::simple_map::{Self, SimpleMap};
+    
+    struct PropertyMap has store, copy, drop {
+        map: SimpleMap<String, PropertyValue>
+    }
+    
+    struct PropertyValue has store, copy, drop {
+        value: vector<u8>,
+        type: String  // "string", "u64", "bool", "address", "vector<u8>"
+    }
+    
+    /// 속성 추가/수정
+    public fun add_property(
+        property_map: &mut PropertyMap,
+        key: String,
+        value: PropertyValue
+    ) {
+        simple_map::upsert(&mut property_map.map, key, value);
+    }
+    
+    /// 타입 안전한 속성 조회
+    public fun get_string_property(
+        property_map: &PropertyMap,
+        key: &String
+    ): Option<String> {
+        if (simple_map::contains_key(&property_map.map, key)) {
+            let property = simple_map::borrow(&property_map.map, key);
+            if (property.type == string::utf8(b"string")) {
+                option::some(string::utf8(property.value))
+            } else {
+                option::none()
+            }
+        } else {
+            option::none()
+        }
+    }
+}
+```
+
+### 3. 로열티 분배 시스템
+```move
+// 프로그래밍 가능한 로열티
+module nft_framework::royalty {
+    use std::vector;
+    
+    struct Royalty has store, copy, drop {
+        payee_addresses: vector<address>,
+        shares: vector<u64>,  // basis points (10000 = 100%)
+        total_shares: u64
+    }
+    
+    /// 로열티 계산 및 분배
+    public fun calculate_royalty_payment(
+        royalty: &Royalty,
+        sale_price: u64
+    ): vector<(address, u64)> {
+        let payments = vector::empty();
+        let i = 0;
+        
+        while (i < vector::length(&royalty.payee_addresses)) {
+            let payee = *vector::borrow(&royalty.payee_addresses, i);
+            let share = *vector::borrow(&royalty.shares, i);
+            let payment = (sale_price * share) / 10000;
+            
+            vector::push_back(&mut payments, (payee, payment));
+            i = i + 1;
+        };
+        
+        payments
+    }
+}
+```
+
+## 📖 세부 학습 가이드
+
+### 1. [NFT 개념 & Collection 설계](/dapp-development/nft-development/nft-concepts-collection-design)
+NFT의 기본 개념부터 확장 가능한 컬렉션 설계까지:
+- Movement NFT의 핵심 개념과 장점
+- Move 리소스 모델을 활용한 안전한 NFT 구현
+- 확장 가능한 컬렉션 아키텍처 설계
+- 다양한 NFT 타입별 설계 패턴 (제너러티브, 진화형, 유틸리티)
+- 가스 효율적인 배치 민팅 구현
+
+### 2. [Token Standard & Metadata](/dapp-development/nft-development/token-standard-metadata)
+Movement NFT 표준과 메타데이터 최적화:
+- Movement Token Standard 완전 가이드
+- JSON 메타데이터 스키마 설계
+- IPFS 통합 및 분산 저장 전략
+- 온체인 vs 오프체인 메타데이터 결정
+- 메타데이터 업데이트 및 버전 관리
+
+### 3. [Resource Account 활용](/dapp-development/nft-development/resource-account-integration)
+프로그래밍 가능한 NFT 관리 시스템:
+- Resource Account 기반 NFT 관리
+- 자동화된 민팅 및 배포 시스템
+- 스케줄 기반 컬렉션 출시
+- 화이트리스트 및 접근 제어
+- 배치 처리를 통한 가스 최적화
+
+### 4. [Royalty & Property Map](/dapp-development/nft-development/royalty-property-map)
+경제 모델과 동적 속성 관리:
+- 프로그래밍 가능한 로열티 시스템
+- 다중 수익자 로열티 분배
+- 동적 속성 및 메타데이터 업데이트
+- 진화하는 NFT 구현 패턴
+- 게임 아이템 특성 시스템
+
+### 5. [완전한 NFT 프로젝트 예제](/dapp-development/nft-development/complete-nft-marketplace)
+종합적인 NFT 마켓플레이스 구축:
+- 완전한 NFT 마켓플레이스 아키텍처
+- 경매 및 고정가 판매 시스템
+- 컬렉션 브라우징 및 필터링
+- 사용자 프로필 및 포트폴리오
+- 실시간 알림 및 활동 피드
+
+## 🛠️ 개발 도구 및 환경
+
+### 필수 개발 도구
+```bash
+# Movement NFT 개발 환경 설정
+movement init nft-project
+cd nft-project
+
+# NFT 관련 의존성 설치
+movement move add AptosFramework/aptos-framework
+movement move add AptosFramework/aptos-token-objects
+
+# 개발 서버 시작
+movement dev --network devnet
+```
+
+### 권장 도구 체인
+```typescript
+// NFT 개발을 위한 TypeScript SDK 설정
+import {
+  MovementAccount,
+  MovementClient,
+  Network
+} from "@movementnetwork/ts-sdk";
+
+const client = new MovementClient({
+  network: Network.DEVNET // 또는 TESTNET, MAINNET
+});
+
+// NFT 관련 헬퍼 함수들
+export const NFTUtils = {
+  // 컬렉션 생성
+  async createCollection(account: MovementAccount, collectionData: CollectionData) {
+    // 구현
+  },
+  
+  // NFT 민팅
+  async mintNFT(account: MovementAccount, mintData: MintData) {
+    // 구현
+  },
+  
+  // 메타데이터 업로드 (IPFS)
+  async uploadMetadata(metadata: NFTMetadata): Promise<string> {
+    // 구현
+  }
+};
+```
+
+### IPFS 통합 도구
+```javascript
+// IPFS 메타데이터 관리
+import { create } from 'ipfs-http-client';
+import { Web3Storage } from 'web3.storage';
+
+class IPFSManager {
+  constructor(web3StorageToken) {
+    this.ipfs = create({ url: 'https://ipfs.infura.io:5001' });
+    this.web3Storage = new Web3Storage({ token: web3StorageToken });
+  }
+  
+  async uploadNFTMetadata(metadata, imageFile) {
+    // 1. 이미지 업로드
+    const imageHash = await this.uploadFile(imageFile);
+    
+    // 2. 메타데이터에 이미지 URL 추가
+    metadata.image = `ipfs://${imageHash}`;
+    
+    // 3. 메타데이터 JSON 업로드
+    const metadataHash = await this.uploadJSON(metadata);
+    
+    return `ipfs://${metadataHash}`;
+  }
+  
+  async uploadFile(file) {
+    const result = await this.ipfs.add(file);
+    return result.cid.toString();
+  }
+  
+  async uploadJSON(jsonData) {
+    const buffer = Buffer.from(JSON.stringify(jsonData));
+    const result = await this.ipfs.add(buffer);
+    return result.cid.toString();
+  }
+}
+```
+
+## 📊 NFT 시장 동향 및 기회
+
+### Movement NFT 생태계 현황
+```
+🎨 창작자 경제 (Creator Economy)
+├── 디지털 아티스트들의 Movement 생태계 진입
+├── 낮은 민팅 비용으로 접근성 향상
+├── 프로그래밍 가능한 로열티로 지속 수익
+└── 크로스체인 호환성으로 시장 확장
+
+💼 비즈니스 기회 (Business Opportunities)
+├── 브랜드 NFT 및 고객 충성도 프로그램
+├── 이벤트 티켓 및 멤버십 시스템
+├── 게임 아이템 및 메타버스 자산
+└── 부동산 및 물리적 자산 토큰화
+
+🔮 미래 트렌드 (Future Trends)
+├── AI 생성 NFT와 동적 콘텐츠
+├── 지속가능성을 고려한 친환경 NFT
+├── 사회적 영향력 및 자선 NFT
+└── 메타버스와 가상현실 통합
+```
+
+### 성공적인 NFT 프로젝트 패턴
+```
+🏆 성공 요소 분석:
+
+1️⃣ 강력한 커뮤니티
+   ├── Discord/Twitter 활발한 소통
+   ├── 정기적인 이벤트 및 업데이트
+   ├── 홀더 전용 혜택 제공
+   └── 로드맵 투명성 및 실행력
+
+2️⃣ 유틸리티와 가치
+   ├── 단순 수집용을 넘어선 실용성
+   ├── 게임, DeFi 등 다른 서비스 연동
+   ├── 진화하는 메타데이터와 기능
+   └── 장기적 가치 창출 메커니즘
+
+3️⃣ 기술적 혁신
+   ├── Move 언어의 고유 기능 활용
+   ├── 가스 효율적인 구현
+   ├── 확장 가능한 아키텍처
+   └── 크로스체인 상호운용성
+
+4️⃣ 마케팅과 파트너십
+   ├── 인플루언서 및 KOL 협업
+   ├── 다른 프로젝트와의 콜라보
+   ├── 전통 미디어 및 갤러리 진출
+   └── 교육 콘텐츠 및 튜토리얼
+```
+
+## 🚀 실습 프로젝트 아이디어
+
+### 초급자용 프로젝트
+1. **개인 아트 포트폴리오 NFT**
+   - 자신의 디지털 작품을 NFT로 민팅
+   - IPFS를 통한 메타데이터 관리
+   - 기본적인 로열티 설정
+
+2. **이벤트 참석 증명 NFT (POAP)**
+   - 특정 이벤트 참석자에게 발급
+   - 시간 기반 민팅 제한
+   - 참석자별 고유 속성
+
+### 중급자용 프로젝트
+3. **제너러티브 PFP 컬렉션**
+   - 다양한 특성 조합으로 고유한 아바타 생성
+   - 희귀도 기반 가격 차등화
+   - 커뮤니티 투표 기반 새로운 특성 추가
+
+4. **멤버십 카드 NFT**
+   - 티어별 차등 혜택 제공
+   - 사용량 기반 포인트 적립
+   - 업그레이드 및 갱신 시스템
+
+### 고급자용 프로젝트  
+5. **진화형 게임 캐릭터 NFT**
+   - 게임 플레이에 따른 스탯 변화
+   - 아이템 장착 및 스킬 학습
+   - 플레이어 간 트레이딩 및 전투
+
+6. **종합 NFT 마켓플레이스**
+   - 다중 컬렉션 지원
+   - 경매 및 즉시 구매 기능
+   - 추천 알고리즘 및 큐레이션
+
+## 🔗 다음 단계
+
+NFT 개발의 전체 그림을 파악했다면, 첫 번째 심화 주제부터 시작해보세요:
+
+**[NFT 개념 & Collection 설계 →](/dapp-development/nft-development/nft-concepts-collection-design)**
+
+## 📚 추가 학습 자료
+
+### 공식 문서
+- [Movement 개발자 포털](https://developer.movementnetwork.xyz/)
+- [Movement NFT 가이드](https://docs.movementnetwork.xyz/nft)
+- [Object 모델 문서](https://docs.movementnetwork.xyz/objects)
+
+### 커뮤니티 리소스
+- **Discord**: #nft-development 채널
+- **GitHub**: [NFT 예제 저장소](https://github.com/movementlabsxyz/nft-examples)
+- **Forum**: NFT 개발 토론
+
+### 도구 및 서비스
+- [Movement NFT SDK](https://www.npmjs.com/package/@movementnetwork/nft-sdk)
+- [IPFS Pinata 서비스](https://pinata.cloud/)
+- [OpenSea 호환 메타데이터](https://docs.opensea.io/docs/metadata-standards)
+
+---
+
+*Movement Network에서 차세대 NFT 경험을 창조하세요! 🧩✨*

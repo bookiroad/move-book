@@ -1,0 +1,218 @@
+# 🏦 DeFi 개발
+
+Movement Network에서 탈중앙화 금융(DeFi) 생태계를 구축하는 종합 가이드입니다. Move 언어의 강력한 기능을 활용하여 안전하고 효율적인 DeFi 프로토콜을 개발해봅니다.
+
+## 🚀 완성된 모듈들
+
+현재 제공되는 완전한 DeFi 개발 가이드:
+
+### 🪙 **[토큰 프레임워크](./fungible-asset-framework)**
+Movement Network의 Fungible Asset 표준을 완전히 마스터합니다.
+- ✅ **고급 토큰 시스템**: 리베이스, 디플레이션, 인플레이션 제어
+- ✅ **스테이킹 메커니즘**: 다중 티어 스테이킹 및 보상 시스템
+- ✅ **베스팅 시스템**: 클리프, 선형/단계적 베스팅 구현
+- ✅ **거버넌스 토큰**: 투표권 및 위임 시스템
+- ✅ **전송 제한**: KYC, 화이트리스트, 일일 한도 제어
+- ✅ **TypeScript SDK**: 완전한 프론트엔드 통합
+
+### 🏦 **[대출/차용 시스템](./lending-borrowing-system)**
+담보 기반 대출 프로토콜을 구축합니다.
+- ✅ **담보 관리**: 다중 자산 담보 및 LTV 제어
+- ✅ **동적 이자율**: 적응형 이자율 모델 구현
+- ✅ **청산 시스템**: 자동 청산 및 인센티브 메커니즘
+- ✅ **리스크 관리**: 헬스 팩터 및 스트레스 테스트
+- ✅ **플래시 론**: 무담보 순간 대출 시스템
+- ✅ **가격 오라클**: 실시간 가격 피드 통합
+
+### 🔄 **[DEX & AMM 구현](./dex-amm-implementation)**
+탈중앙화 거래소와 자동화된 마켓 메이커를 구축합니다.
+- ✅ **멀티 AMM**: Constant Product, Stable Swap, Concentrated Liquidity
+- ✅ **집중 유동성**: Uniswap V3 스타일 고급 유동성 관리
+- ✅ **MEV 보호**: 샌드위치 공격 방지 및 배치 처리
+- ✅ **스마트 라우팅**: 최적 경로 탐색 알고리즘
+- ✅ **플래시 스왑**: 차익거래 및 고급 거래 전략
+- ✅ **수수료 분배**: DAO 기반 수익 분배 시스템
+
+### 🏛️ **[거버넌스 시스템](./governance-dao-system)**
+완전한 DAO 거버넌스 시스템을 구축합니다.
+- ✅ **제안 시스템**: 파라미터 변경, 업그레이드, 지출 제안
+- ✅ **위임 투표**: 대리인 시스템 및 투표력 위임
+- ✅ **쿼드라틱 투표**: 고급 투표 메커니즘
+- ✅ **타임락**: 실행 지연 및 보안 강화
+- ✅ **멀티시그**: 다중 서명 보안 시스템
+- ✅ **위원회**: 전문 분야별 의사결정 위원회
+
+### 🌟 **[통합 DeFi 프로토콜](./complete-defi-protocol)**
+모든 기능을 통합한 완전한 DeFi 생태계를 구축합니다.
+- ✅ **원클릭 DeFi**: 토큰 생성부터 DAO까지 한 번에
+- ✅ **자동화 시스템**: 포트폴리오 리밸런싱 및 수익률 최적화
+- ✅ **개인화 대시보드**: 사용자별 맞춤 분석 및 추천
+- ✅ **실시간 모니터링**: 위험 감지 및 알림 시스템
+- ✅ **긴급 대응**: 자동 출금 및 보호 메커니즘
+- ✅ **크로스체인**: 다중 체인 자산 관리
+
+## 🎨 Movement DeFi의 특징
+
+### ⚡ **고성능 & 저비용**
+- 초당 수천 건의 거래 처리
+- 복잡한 DeFi 거래도 저렴한 가스비
+- 즉시 최종성으로 빠른 확정
+
+### 🔐 **보안 & 안정성**
+- Move 언어의 자원 지향 프로그래밍
+- 컴파일 타임 안전성 검증
+- 형식적 검증 가능한 스마트 컨트랙트
+
+### 🌍 **상호 운용성**
+- 크로스체인 호환성
+- 표준 프로토콜 준수
+- 모듈형 아키텍처
+
+## 🛠️ 개발 환경 설정
+
+### 필수 도구 설치
+```bash
+# Movement CLI 설치
+curl -fsSL https://get.movementnetwork.xyz | sh
+
+# TypeScript SDK 설치
+npm install @movementnetwork/ts-sdk
+```
+
+### 프로젝트 초기화
+```bash
+# DeFi 프로젝트 생성
+movement init my-defi-protocol --template defi
+cd my-defi-protocol
+
+# 개발 서버 시작
+movement dev
+```
+
+## 📊 실전 프로젝트 예시
+
+실제 구현 가이드에서 구축할 수 있는 프로젝트들:
+
+### 🪙 **Advanced Token System**
+```typescript
+// 고급 토큰 시스템 구현
+const tokenManager = new MovementTokenManager(client, moduleAddress);
+
+const token = await tokenManager.createAdvancedToken(creator, {
+  name: "DeFi Governance Token",
+  symbol: "DGT",
+  vestingSchedule: {
+    cliffDuration: 365 * 24 * 3600,
+    vestingDuration: 4 * 365 * 24 * 3600,
+    unlockPercentage: 1000,
+    linearVesting: true
+  },
+  transferRestrictions: {
+    whitelistEnabled: true,
+    requireKyc: true,
+    maxTransferAmount: 100000
+  }
+});
+```
+
+### 🏦 **Lending Protocol**
+```typescript
+// 담보 기반 대출 시스템
+const lendingManager = new LendingProtocolManager(client, moduleAddress);
+
+await lendingManager.supplyCollateral(user, "USDC", 10000);
+await lendingManager.borrowAsset(user, "ETH", 5000, {
+  ltv: 8000,
+  liquidationThreshold: 8500
+});
+```
+
+### 🔄 **DEX Platform**
+```typescript
+// 멀티 AMM DEX 구현
+const dexManager = new ComprehensiveDEXManager(client, moduleAddress);
+
+await dexManager.smartSwap(trader, {
+  path: ["USDC", "ETH", "BTC"],
+  amountIn: 1000,
+  slippageTolerance: 500
+});
+
+await dexManager.createConcentratedPosition(provider, {
+  tickLower: -887220,
+  tickUpper: 887220,
+  amount0: 1000,
+  amount1: 1000
+});
+```
+
+### 🏛️ **DAO Governance**
+```typescript
+// 완전한 거버넌스 시스템
+const daoManager = new DAOGovernanceManager(client, moduleAddress);
+
+const proposalId = await daoManager.createProposal(proposer, {
+  title: "Increase Protocol Fee",
+  description: "Proposal to increase trading fees to 0.5%",
+  executionActions: [{
+    target: dexAddress,
+    functionName: "update_fee_rate",
+    args: encodeArgs([500])
+  }]
+});
+
+await daoManager.castVote(voter, proposalId, {
+  support: 1,
+  reason: "This will improve protocol sustainability"
+});
+```
+
+## 🎯 학습 순서
+
+DeFi 개발을 처음 시작하신다면 다음 순서로 학습하는 것을 추천합니다:
+
+1. **🪙 토큰 프레임워크** - DeFi의 기본이 되는 토큰 시스템 이해
+2. **🏦 대출/차용 시스템** - 담보 기반 금융 서비스 구축  
+3. **🔄 DEX & AMM 구현** - 탈중앙화 거래 인프라 개발
+4. **🏛️ 거버넌스 시스템** - 투명한 의사결정 메커니즘 구축
+5. **🌟 통합 DeFi 프로토콜** - 모든 기능을 통합한 완전한 생태계
+
+## 🏆 개발 성과
+
+각 모듈을 완료하면서 획득할 수 있는 실력:
+
+- **🥉 토큰**: 고급 토큰 시스템 및 토큰경제학 설계
+- **🥈 대출**: 담보 관리 및 리스크 모델링 구현
+- **🥇 DEX**: 복합 AMM 및 MEV 보호 시스템 개발
+- **🏛️ 거버넌스**: DAO 기반 탈중앙화 조직 운영
+- **💎 통합**: 엔터프라이즈급 DeFi 생태계 구축
+
+## 🚀 시작하기
+
+준비되셨나요? 첫 번째 단계부터 시작해봅시다!
+
+<div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-8">
+  <div className="p-6 border rounded-lg">
+    <h3 className="text-xl font-bold mb-3">🪙 토큰 프레임워크</h3>
+    <p className="text-gray-600 mb-4">
+      Fungible Asset 표준을 마스터하고 고급 토큰 시스템을 구현합니다.
+    </p>
+    <a href="./fungible-asset-framework" className="inline-block bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 transition-colors">
+      학습 시작 →
+    </a>
+  </div>
+  
+  <div className="p-6 border rounded-lg">
+    <h3 className="text-xl font-bold mb-3">🏦 대출/차용 시스템</h3>
+    <p className="text-gray-600 mb-4">
+      담보 기반 대출 프로토콜과 위험 관리 시스템을 구축합니다.
+    </p>
+    <a href="./lending-borrowing-system" className="inline-block bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 transition-colors">
+      학습 시작 →
+    </a>
+  </div>
+</div>
+
+---
+
+**Movement Network에서 차세대 DeFi 생태계를 구축하세요!** 🏦✨

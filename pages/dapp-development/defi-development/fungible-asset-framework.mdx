@@ -1,0 +1,1656 @@
+# 🪙 Fungible Asset 프레임워크
+
+Movement Network의 네이티브 Fungible Asset 시스템을 완전히 마스터하는 가이드입니다. 토큰 생성부터 고급 DeFi 통합까지, 안전하고 효율적인 금융 자산을 구축합니다.
+
+## 🎯 학습 목표
+
+이 섹션을 완료하면:
+- Movement Fungible Asset 표준을 완전히 이해할 수 있습니다
+- 커스텀 토큰을 생성하고 관리할 수 있습니다
+- 멀티토큰 시스템을 구현할 수 있습니다
+- 토큰 메타데이터를 최적화할 수 있습니다
+- 크로스체인 토큰 브리지를 통합할 수 있습니다
+
+## 💎 Movement Fungible Asset 개념
+
+### Fungible Asset vs Coin 차이점
+```
+🪙 Movement Fungible Asset의 장점:
+
+📈 기능성 (Functionality)
+├── 더 풍부한 메타데이터 지원
+├── 동적 권한 관리 시스템
+├── 확장 가능한 토큰 표준
+└── 네이티브 DeFi 통합
+
+🔒 안전성 (Safety)
+├── Object 기반 리소스 관리
+├── 타입 안전한 토큰 조작
+├── 자동화된 권한 검증
+└── 메모리 안전성 보장
+
+⚡ 성능 (Performance)
+├── 최적화된 스토리지 구조
+├── 효율적인 배치 처리
+├── 낮은 가스 비용
+└── 빠른 트랜잭션 처리
+
+🔗 상호운용성 (Interoperability)  
+├── EVM 토큰과의 호환성
+├── 크로스체인 브리지 지원
+├── DeFi 프로토콜 네이티브 통합
+└── 표준화된 인터페이스
+```
+
+### 핵심 아키텍처
+```move
+// Movement Fungible Asset 핵심 구조
+module fungible_asset_framework::advanced_fa {
+    use aptos_framework::fungible_asset::{
+        Self, 
+        FungibleAsset, 
+        Metadata, 
+        MintRef, 
+        TransferRef, 
+        BurnRef
+    };
+    use aptos_framework::object::{Self, Object, ConstructorRef};
+    use aptos_framework::primary_fungible_store;
+    use std::string::{Self, String};
+    use std::option::{Self, Option};
+    use std::vector;
+    use aptos_framework::timestamp;
+    use aptos_framework::event::{Self, EventHandle};
+    
+    /// 고급 토큰 관리자
+    struct AdvancedTokenManager has key {
+        // 권한 관리
+        mint_ref: MintRef,
+        transfer_ref: TransferRef, 
+        burn_ref: BurnRef,
+        
+        // 토큰 정보
+        metadata: Object<Metadata>,
+        creator: address,
+        
+        // 고급 기능
+        is_paused: bool,
+        max_supply: Option<u64>,
+        current_supply: u64,
+        
+        // 권한 제어
+        minters: vector<address>,
+        burners: vector<address>,
+        transfer_controllers: vector<address>,
+        
+        // 토큰경제학
+        inflation_rate: u64,      // basis points per year
+        deflation_rate: u64,      // basis points per transaction
+        fee_on_transfer: u64,     // basis points
+        fee_recipient: Option<address>,
+        
+        // 거버넌스
+        governance_token: Option<Object<Metadata>>,
+        voting_power_multiplier: u64,
+        
+        // 메타데이터 확장
+        extended_metadata: ExtendedMetadata,
+        
+        // 이벤트
+        token_events: EventHandle<TokenEvent>,
+        
+        // 통계
+        total_minted: u64,
+        total_burned: u64,
+        unique_holders: u64,
+        
+        created_at: u64,
+        last_updated: u64
+    }
+    
+    /// 확장 메타데이터
+    struct ExtendedMetadata has store, drop, copy {
+        // 기본 정보 확장
+        description: String,
+        external_url: String,
+        logo_url: String,
+        banner_url: String,
+        
+        // 카테고리 및 태그
+        category: String,  // "defi", "gaming", "utility", etc.
+        tags: vector<String>,
+        
+        // 소셜 링크
+        website: Option<String>,
+        twitter: Option<String>,
+        discord: Option<String>,
+        telegram: Option<String>,
+        
+        // 기술적 메타데이터
+        contract_version: String,
+        audit_reports: vector<String>,
+        
+        // 토큰경제학 정보
+        initial_supply: u64,
+        circulating_supply: u64,
+        vesting_schedule: Option<VestingSchedule>,
+        
+        // 거래 제한
+        transfer_restrictions: TransferRestrictions
+    }
+    
+    /// 베스팅 스케줄
+    struct VestingSchedule has store, drop, copy {
+        cliff_duration: u64,        // 클리프 기간 (초)
+        vesting_duration: u64,      // 총 베스팅 기간 (초)
+        unlock_percentage: u64,     // 즉시 언락 비율 (basis points)
+        linear_vesting: bool        // 선형 vs 단계적 베스팅
+    }
+    
+    /// 전송 제한
+    struct TransferRestrictions has store, drop, copy {
+        whitelist_enabled: bool,
+        blacklist_enabled: bool,
+        max_transfer_amount: Option<u64>,
+        daily_transfer_limit: Option<u64>,
+        require_kyc: bool,
+        trading_start_time: Option<u64>
+    }
+    
+    /// 토큰 이벤트
+    struct TokenEvent has drop, store {
+        event_type: String,
+        from: Option<address>,
+        to: Option<address>,
+        amount: u64,
+        additional_data: String,
+        timestamp: u64
+    }
+    
+    /// 사용자 토큰 정보
+    struct UserTokenInfo has key {
+        // 보유 정보
+        balance: u64,
+        locked_balance: u64,
+        
+        // 베스팅 정보
+        vested_amount: u64,
+        vesting_start_time: u64,
+        last_claim_time: u64,
+        
+        // 거래 제한
+        daily_transferred: u64,
+        last_transfer_date: u64,
+        
+        // KYC 상태
+        kyc_verified: bool,
+        whitelist_status: bool,
+        
+        // 스테이킹 정보
+        staked_amount: u64,
+        staking_rewards: u64,
+        last_reward_claim: u64
+    }
+    
+    /// 고급 토큰 생성
+    public fun create_advanced_token(
+        creator: &signer,
+        name: String,
+        symbol: String,
+        decimals: u8,
+        icon_uri: String,
+        project_uri: String,
+        initial_supply: u64,
+        max_supply: Option<u64>,    
+        extended_metadata: ExtendedMetadata
+    ): Object<Metadata> {
+        let creator_addr = signer::address_of(creator);
+        
+        // 입력 검증
+        assert!(string::length(&name) > 0, E_INVALID_NAME);
+        assert!(string::length(&symbol) > 0, E_INVALID_SYMBOL);
+        assert!(decimals <= 18, E_INVALID_DECIMALS);
+        
+        if (option::is_some(&max_supply)) {
+            let max_supply_val = *option::borrow(&max_supply);
+            assert!(initial_supply <= max_supply_val, E_EXCEEDS_MAX_SUPPLY);
+        };
+        
+        // 토큰 메타데이터 객체 생성
+        let constructor_ref = object::create_named_object(
+            creator, 
+            *string::bytes(&name)
+        );
+        
+        // Fungible Asset 생성
+        primary_fungible_store::create_primary_store_enabled_fungible_asset(
+            &constructor_ref,
+            option::some(initial_supply),
+            name,
+            symbol,
+            decimals,
+            icon_uri,
+            project_uri
+        );
+        
+        let metadata_obj = object::object_from_constructor_ref<Metadata>(&constructor_ref);
+        
+        // 권한 참조 생성
+        let mint_ref = fungible_asset::generate_mint_ref(&constructor_ref);
+        let transfer_ref = fungible_asset::generate_transfer_ref(&constructor_ref);
+        let burn_ref = fungible_asset::generate_burn_ref(&constructor_ref);
+        
+        // 토큰 관리자 생성
+        let token_signer = object::generate_signer(&constructor_ref);
+        let manager = AdvancedTokenManager {
+            mint_ref,
+            transfer_ref,
+            burn_ref,
+            metadata: metadata_obj,
+            creator: creator_addr,
+            is_paused: false,
+            max_supply,
+            current_supply: initial_supply,
+            minters: vector::singleton(creator_addr),
+            burners: vector::singleton(creator_addr),
+            transfer_controllers: vector::singleton(creator_addr),
+            inflation_rate: 0,
+            deflation_rate: 0,
+            fee_on_transfer: 0,
+            fee_recipient: option::none(),
+            governance_token: option::none(),
+            voting_power_multiplier: 10000, // 1:1 기본값
+            extended_metadata,
+            token_events: account::new_event_handle<TokenEvent>(&token_signer),
+            total_minted: initial_supply,
+            total_burned: 0,
+            unique_holders: if (initial_supply > 0) 1 else 0,
+            created_at: timestamp::now_seconds(),
+            last_updated: timestamp::now_seconds()
+        };
+        
+        move_to(&token_signer, manager);
+        
+        // 초기 공급량을 창작자에게 발행
+        if (initial_supply > 0) {
+            let initial_fa = fungible_asset::mint(&mint_ref, initial_supply);
+            primary_fungible_store::deposit(creator_addr, initial_fa);
+            
+            // 사용자 정보 초기화
+            initialize_user_info(creator, metadata_obj, initial_supply);
+        };
+        
+        metadata_obj
+    }
+    
+    /// 사용자 정보 초기화
+    fun initialize_user_info(
+        user: &signer,
+        token_metadata: Object<Metadata>,
+        initial_amount: u64
+    ) {
+        let user_addr = signer::address_of(user);
+        
+        if (!exists<UserTokenInfo>(user_addr)) {
+            let user_info = UserTokenInfo {
+                balance: initial_amount,
+                locked_balance: 0,
+                vested_amount: 0,
+                vesting_start_time: 0,
+                last_claim_time: 0,
+                daily_transferred: 0,
+                last_transfer_date: 0,
+                kyc_verified: false,
+                whitelist_status: false,
+                staked_amount: 0,
+                staking_rewards: 0,
+                last_reward_claim: 0
+            };
+            
+            move_to(user, user_info);
+        }
+    }
+    
+    /// 고급 토큰 민팅 (인플레이션 제어 포함)
+    public fun advanced_mint(
+        minter: &signer,
+        token_metadata: Object<Metadata>,
+        to: address,
+        amount: u64,
+        reason: String
+    ) acquires AdvancedTokenManager, UserTokenInfo {
+        let minter_addr = signer::address_of(minter);
+        let token_addr = object::object_address(&token_metadata);
+        let manager = borrow_global_mut<AdvancedTokenManager>(token_addr);
+        
+        // 권한 확인
+        assert!(
+            vector::contains(&manager.minters, &minter_addr) || 
+            minter_addr == manager.creator,
+            E_NOT_AUTHORIZED_MINTER
+        );
+        
+        // 일시정지 확인
+        assert!(!manager.is_paused, E_TOKEN_PAUSED);
+        
+        // 최대 공급량 확인
+        if (option::is_some(&manager.max_supply)) {
+            let max_supply = *option::borrow(&manager.max_supply);
+            assert!(manager.current_supply + amount <= max_supply, E_EXCEEDS_MAX_SUPPLY);
+        };
+        
+        // 인플레이션 제어 확인
+        if (manager.inflation_rate > 0) {
+            let time_since_creation = timestamp::now_seconds() - manager.created_at;
+            let max_inflated_supply = calculate_max_inflated_supply(
+                manager.total_minted,
+                manager.inflation_rate,
+                time_since_creation
+            );
+            assert!(manager.current_supply + amount <= max_inflated_supply, E_INFLATION_LIMIT_EXCEEDED);
+        };
+        
+        // 토큰 민팅
+        let fa = fungible_asset::mint(&manager.mint_ref, amount);
+        primary_fungible_store::deposit(to, fa);
+        
+        // 통계 업데이트
+        manager.current_supply = manager.current_supply + amount;
+        manager.total_minted = manager.total_minted + amount;
+        manager.last_updated = timestamp::now_seconds();
+        
+        // 새로운 홀더인지 확인
+        let balance = primary_fungible_store::balance(to, token_metadata);
+        if (balance == amount) { // 새로운 홀더
+            manager.unique_holders = manager.unique_holders + 1;
+        };
+        
+        // 사용자 정보 업데이트
+        if (!exists<UserTokenInfo>(to)) {
+            let user_info = UserTokenInfo {
+                balance: amount,
+                locked_balance: 0,
+                vested_amount: 0,
+                vesting_start_time: 0,
+                last_claim_time: 0,
+                daily_transferred: 0,
+                last_transfer_date: 0,
+                kyc_verified: false,
+                whitelist_status: false,
+                staked_amount: 0,
+                staking_rewards: 0,
+                last_reward_claim: 0
+            };
+            move_to(&account::create_signer(to), user_info);
+        } else {
+            let user_info = borrow_global_mut<UserTokenInfo>(to);
+            user_info.balance = user_info.balance + amount;
+        };
+        
+        // 이벤트 발생
+        event::emit_event(&mut manager.token_events, TokenEvent {
+            event_type: string::utf8(b"mint"),
+            from: option::none(),
+            to: option::some(to),
+            amount,
+            additional_data: reason,
+            timestamp: timestamp::now_seconds()
+        });
+    }
+    
+    /// 조건부 전송 (KYC, 화이트리스트, 한도 확인)
+    public fun conditional_transfer(
+        from: &signer,
+        token_metadata: Object<Metadata>,
+        to: address,
+        amount: u64
+    ) acquires AdvancedTokenManager, UserTokenInfo {
+        let from_addr = signer::address_of(from);
+        let token_addr = object::object_address(&token_metadata);
+        let manager = borrow_global_mut<AdvancedTokenManager>(token_addr);
+        
+        // 일시정지 확인
+        assert!(!manager.is_paused, E_TOKEN_PAUSED);
+        
+        // 전송 제한 확인
+        let restrictions = &manager.extended_metadata.transfer_restrictions;
+        
+        // 거래 시작 시간 확인
+        if (option::is_some(&restrictions.trading_start_time)) {
+            let start_time = *option::borrow(&restrictions.trading_start_time);
+            assert!(timestamp::now_seconds() >= start_time, E_TRADING_NOT_STARTED);
+        };
+        
+        // 사용자 정보 확인
+        let from_info = if (exists<UserTokenInfo>(from_addr)) {
+            borrow_global_mut<UserTokenInfo>(from_addr)
+        } else {
+            initialize_user_info(from, token_metadata, 0);
+            borrow_global_mut<UserTokenInfo>(from_addr)
+        };
+        
+        // KYC 확인
+        if (restrictions.require_kyc) {
+            assert!(from_info.kyc_verified, E_KYC_REQUIRED);
+        };
+        
+        // 화이트리스트 확인
+        if (restrictions.whitelist_enabled) {
+            assert!(from_info.whitelist_status, E_NOT_WHITELISTED);
+        };
+        
+        // 최대 전송 금액 확인
+        if (option::is_some(&restrictions.max_transfer_amount)) {
+            let max_amount = *option::borrow(&restrictions.max_transfer_amount);
+            assert!(amount <= max_amount, E_EXCEEDS_MAX_TRANSFER);
+        };
+        
+        // 일일 전송 한도 확인
+        if (option::is_some(&restrictions.daily_transfer_limit)) {
+            let current_date = timestamp::now_seconds() / (24 * 3600);
+            if (from_info.last_transfer_date != current_date) {
+                from_info.daily_transferred = 0;
+                from_info.last_transfer_date = current_date;
+            };
+            
+            let daily_limit = *option::borrow(&restrictions.daily_transfer_limit);
+            assert!(from_info.daily_transferred + amount <= daily_limit, E_DAILY_LIMIT_EXCEEDED);
+            from_info.daily_transferred = from_info.daily_transferred + amount;
+        };
+        
+        // 전송 수수료 계산
+        let fee_amount = (amount * manager.fee_on_transfer) / 10000;
+        let transfer_amount = amount - fee_amount;
+        
+        // 실제 전송 실행
+        let fa = primary_fungible_store::withdraw(from, token_metadata, amount);
+        
+        if (fee_amount > 0 && option::is_some(&manager.fee_recipient)) {
+            let fee_recipient = *option::borrow(&manager.fee_recipient);
+            let fee_fa = fungible_asset::extract(&mut fa, fee_amount);
+            primary_fungible_store::deposit(fee_recipient, fee_fa);
+        };
+        
+        primary_fungible_store::deposit(to, fa);
+        
+        // 디플레이션 처리
+        if (manager.deflation_rate > 0) {
+            let burn_amount = (amount * manager.deflation_rate) / 10000;
+            if (burn_amount > 0 && primary_fungible_store::balance(from_addr, token_metadata) >= burn_amount) {
+                let burn_fa = primary_fungible_store::withdraw(from, token_metadata, burn_amount);
+                fungible_asset::burn(&manager.burn_ref, burn_fa);
+                
+                manager.current_supply = manager.current_supply - burn_amount;
+                manager.total_burned = manager.total_burned + burn_amount;
+            }
+        };
+        
+        // 사용자 정보 업데이트
+        from_info.balance = primary_fungible_store::balance(from_addr, token_metadata);
+        
+        // 받는 사람 정보 업데이트
+        if (!exists<UserTokenInfo>(to)) {
+            initialize_user_info(&account::create_signer(to), token_metadata, transfer_amount);
+        } else {
+            let to_info = borrow_global_mut<UserTokenInfo>(to);
+            to_info.balance = to_info.balance + transfer_amount;
+        };
+        
+        // 이벤트 발생
+        event::emit_event(&mut manager.token_events, TokenEvent {
+            event_type: string::utf8(b"transfer"),
+            from: option::some(from_addr),
+            to: option::some(to),
+            amount: transfer_amount,
+            additional_data: string::utf8(b""),
+            timestamp: timestamp::now_seconds()
+        });
+        
+        if (fee_amount > 0) {
+            event::emit_event(&mut manager.token_events, TokenEvent {
+                event_type: string::utf8(b"fee"),
+                from: option::some(from_addr),
+                to: manager.fee_recipient,
+                amount: fee_amount,
+                additional_data: string::utf8(b"transfer_fee"),
+                timestamp: timestamp::now_seconds()
+            });
+        }
+    }
+    
+    /// 베스팅 토큰 클레임
+    public fun claim_vested_tokens(
+        user: &signer,
+        token_metadata: Object<Metadata>
+    ) acquires AdvancedTokenManager, UserTokenInfo {
+        let user_addr = signer::address_of(user);
+        let token_addr = object::object_address(&token_metadata);
+        let manager = borrow_global_mut<AdvancedTokenManager>(token_addr);
+        
+        assert!(exists<UserTokenInfo>(user_addr), E_USER_INFO_NOT_FOUND);
+        let user_info = borrow_global_mut<UserTokenInfo>(user_addr);
+        
+        assert!(user_info.vested_amount > 0, E_NO_VESTED_TOKENS);
+        
+        let vesting_schedule = &manager.extended_metadata.vesting_schedule;
+        assert!(option::is_some(vesting_schedule), E_NO_VESTING_SCHEDULE);
+        
+        let schedule = option::borrow(vesting_schedule);
+        let current_time = timestamp::now_seconds();
+        
+        // 클리프 기간 확인
+        assert!(current_time >= user_info.vesting_start_time + schedule.cliff_duration, E_CLIFF_NOT_REACHED);
+        
+        // 클레임 가능한 금액 계산
+        let claimable_amount = calculate_claimable_amount(user_info, schedule, current_time);
+        assert!(claimable_amount > 0, E_NO_CLAIMABLE_TOKENS);
+        
+        // 토큰 민팅 및 지급
+        let fa = fungible_asset::mint(&manager.mint_ref, claimable_amount);
+        primary_fungible_store::deposit(user_addr, fa);
+        
+        // 사용자 정보 업데이트
+        user_info.vested_amount = user_info.vested_amount - claimable_amount;
+        user_info.last_claim_time = current_time;
+        user_info.balance = user_info.balance + claimable_amount;
+        
+        // 관리자 통계 업데이트
+        manager.current_supply = manager.current_supply + claimable_amount;
+        manager.total_minted = manager.total_minted + claimable_amount;
+        
+        // 이벤트 발생
+        event::emit_event(&mut manager.token_events, TokenEvent {
+            event_type: string::utf8(b"vesting_claim"),
+            from: option::none(),
+            to: option::some(user_addr),
+            amount: claimable_amount,
+            additional_data: string::utf8(b""),
+            timestamp: current_time
+        });
+    }
+    
+    /// 스테이킹 시스템
+    public fun stake_tokens(
+        user: &signer,
+        token_metadata: Object<Metadata>,
+        amount: u64
+    ) acquires AdvancedTokenManager, UserTokenInfo {
+        let user_addr = signer::address_of(user);
+        let token_addr = object::object_address(&token_metadata);
+        let manager = borrow_global_mut<AdvancedTokenManager>(token_addr);
+        
+        assert!(exists<UserTokenInfo>(user_addr), E_USER_INFO_NOT_FOUND);
+        let user_info = borrow_global_mut<UserTokenInfo>(user_addr);
+        
+        assert!(amount > 0, E_INVALID_AMOUNT);
+        assert!(primary_fungible_store::balance(user_addr, token_metadata) >= amount, E_INSUFFICIENT_BALANCE);
+        
+        // 토큰을 스테이킹 풀로 이동 (실제로는 락업)
+        let fa = primary_fungible_store::withdraw(user, token_metadata, amount);
+        // 스테이킹 풀에 예치 (여기서는 단순히 소각하고 기록만 유지)
+        fungible_asset::burn(&manager.burn_ref, fa);
+        
+        // 기존 보상 정산
+        let pending_rewards = calculate_staking_rewards(user_info, timestamp::now_seconds());
+        user_info.staking_rewards = user_info.staking_rewards + pending_rewards;
+        
+        // 스테이킹 정보 업데이트
+        user_info.staked_amount = user_info.staked_amount + amount;
+        user_info.last_reward_claim = timestamp::now_seconds();
+        user_info.locked_balance = user_info.locked_balance + amount;
+        
+        // 이벤트 발생
+        event::emit_event(&mut manager.token_events, TokenEvent {
+            event_type: string::utf8(b"stake"),
+            from: option::some(user_addr),
+            to: option::none(),
+            amount,
+            additional_data: string::utf8(b""),
+            timestamp: timestamp::now_seconds()
+        });
+    }
+    
+    /// 스테이킹 해제
+    public fun unstake_tokens(
+        user: &signer,
+        token_metadata: Object<Metadata>,
+        amount: u64
+    ) acquires AdvancedTokenManager, UserTokenInfo {
+        let user_addr = signer::address_of(user);
+        let token_addr = object::object_address(&token_metadata);
+        let manager = borrow_global_mut<AdvancedTokenManager>(token_addr);
+        
+        assert!(exists<UserTokenInfo>(user_addr), E_USER_INFO_NOT_FOUND);
+        let user_info = borrow_global_mut<UserTokenInfo>(user_addr);
+        
+        assert!(amount > 0, E_INVALID_AMOUNT);
+        assert!(user_info.staked_amount >= amount, E_INSUFFICIENT_STAKED);
+        
+        // 보상 정산
+        let pending_rewards = calculate_staking_rewards(user_info, timestamp::now_seconds());
+        user_info.staking_rewards = user_info.staking_rewards + pending_rewards;
+        
+        // 스테이킹 해제 (토큰 재발행)
+        let fa = fungible_asset::mint(&manager.mint_ref, amount);
+        primary_fungible_store::deposit(user_addr, fa);
+        
+        // 스테이킹 정보 업데이트
+        user_info.staked_amount = user_info.staked_amount - amount;
+        user_info.locked_balance = user_info.locked_balance - amount;
+        user_info.last_reward_claim = timestamp::now_seconds();
+        
+        // 이벤트 발생
+        event::emit_event(&mut manager.token_events, TokenEvent {
+            event_type: string::utf8(b"unstake"),
+            from: option::none(),
+            to: option::some(user_addr),
+            amount,
+            additional_data: string::utf8(b""),
+            timestamp: timestamp::now_seconds()
+        });
+    }
+    
+    /// 스테이킹 보상 클레임
+    public fun claim_staking_rewards(
+        user: &signer,
+        token_metadata: Object<Metadata>
+    ) acquires AdvancedTokenManager, UserTokenInfo {
+        let user_addr = signer::address_of(user);
+        let token_addr = object::object_address(&token_metadata);
+        let manager = borrow_global_mut<AdvancedTokenManager>(token_addr);
+        
+        assert!(exists<UserTokenInfo>(user_addr), E_USER_INFO_NOT_FOUND);
+        let user_info = borrow_global_mut<UserTokenInfo>(user_addr);
+        
+        // 보상 계산
+        let pending_rewards = calculate_staking_rewards(user_info, timestamp::now_seconds());
+        let total_rewards = user_info.staking_rewards + pending_rewards;
+        
+        assert!(total_rewards > 0, E_NO_REWARDS);
+        
+        // 보상 지급
+        let reward_fa = fungible_asset::mint(&manager.mint_ref, total_rewards);
+        primary_fungible_store::deposit(user_addr, reward_fa);
+        
+        // 보상 정보 초기화
+        user_info.staking_rewards = 0;
+        user_info.last_reward_claim = timestamp::now_seconds();
+        
+        // 통계 업데이트
+        manager.current_supply = manager.current_supply + total_rewards;
+        manager.total_minted = manager.total_minted + total_rewards;
+        
+        // 이벤트 발생
+        event::emit_event(&mut manager.token_events, TokenEvent {
+            event_type: string::utf8(b"reward_claim"),
+            from: option::none(),
+            to: option::some(user_addr),
+            amount: total_rewards,
+            additional_data: string::utf8(b"staking_reward"),
+            timestamp: timestamp::now_seconds()
+        });
+    }
+    
+    /// 거버넌스 투표력 계산
+    public fun get_voting_power(
+        user_addr: address,
+        token_metadata: Object<Metadata>
+    ): u64 acquires AdvancedTokenManager, UserTokenInfo {
+        let token_addr = object::object_address(&token_metadata);
+        let manager = borrow_global<AdvancedTokenManager>(token_addr);
+        
+        if (!exists<UserTokenInfo>(user_addr)) {
+            return 0
+        };
+        
+        let user_info = borrow_global<UserTokenInfo>(user_addr);
+        let base_balance = primary_fungible_store::balance(user_addr, token_metadata);
+        
+        // 기본 투표력 + 스테이킹 보너스
+        let voting_power = (base_balance * manager.voting_power_multiplier) / 10000 +
+                          (user_info.staked_amount * manager.voting_power_multiplier * 2) / 10000; // 스테이킹 2배 보너스
+        
+        voting_power
+    }
+    
+    /// 토큰 일시정지/재개
+    public fun set_pause_status(
+        admin: &signer,
+        token_metadata: Object<Metadata>,
+        paused: bool
+    ) acquires AdvancedTokenManager {
+        let admin_addr = signer::address_of(admin);
+        let token_addr = object::object_address(&token_metadata);
+        let manager = borrow_global_mut<AdvancedTokenManager>(token_addr);
+        
+        assert!(admin_addr == manager.creator, E_NOT_AUTHORIZED);
+        
+        manager.is_paused = paused;
+        manager.last_updated = timestamp::now_seconds();
+        
+        // 이벤트 발생
+        event::emit_event(&mut manager.token_events, TokenEvent {
+            event_type: if (paused) string::utf8(b"paused") else string::utf8(b"unpaused"),
+            from: option::some(admin_addr),
+            to: option::none(),
+            amount: 0,
+            additional_data: string::utf8(b""),
+            timestamp: timestamp::now_seconds()
+        });
+    }
+    
+    /// KYC 상태 업데이트
+    public fun update_kyc_status(
+        admin: &signer,
+        token_metadata: Object<Metadata>,
+        user_addr: address,
+        kyc_verified: bool
+    ) acquires AdvancedTokenManager, UserTokenInfo {
+        let admin_addr = signer::address_of(admin);
+        let token_addr = object::object_address(&token_metadata);
+        let manager = borrow_global<AdvancedTokenManager>(token_addr);
+        
+        assert!(
+            admin_addr == manager.creator || 
+            vector::contains(&manager.transfer_controllers, &admin_addr),
+            E_NOT_AUTHORIZED
+        );
+        
+        if (!exists<UserTokenInfo>(user_addr)) {
+            let user_info = UserTokenInfo {
+                balance: 0,
+                locked_balance: 0,
+                vested_amount: 0,
+                vesting_start_time: 0,
+                last_claim_time: 0,
+                daily_transferred: 0,
+                last_transfer_date: 0,
+                kyc_verified,
+                whitelist_status: false,
+                staked_amount: 0,
+                staking_rewards: 0,
+                last_reward_claim: 0
+            };
+            move_to(&account::create_signer(user_addr), user_info);
+        } else {
+            let user_info = borrow_global_mut<UserTokenInfo>(user_addr);
+            user_info.kyc_verified = kyc_verified;
+        }
+    }
+    
+    /// 화이트리스트 관리
+    public fun update_whitelist_status(
+        admin: &signer,
+        token_metadata: Object<Metadata>,
+        users: vector<address>,
+        whitelisted: bool
+    ) acquires AdvancedTokenManager, UserTokenInfo {
+        let admin_addr = signer::address_of(admin);
+        let token_addr = object::object_address(&token_metadata);
+        let manager = borrow_global<AdvancedTokenManager>(token_addr);
+        
+        assert!(
+            admin_addr == manager.creator || 
+            vector::contains(&manager.transfer_controllers, &admin_addr),
+            E_NOT_AUTHORIZED
+        );
+        
+        let i = 0;
+        while (i < vector::length(&users)) {
+            let user_addr = *vector::borrow(&users, i);
+            
+            if (!exists<UserTokenInfo>(user_addr)) {
+                let user_info = UserTokenInfo {
+                    balance: 0,
+                    locked_balance: 0,
+                    vested_amount: 0,
+                    vesting_start_time: 0,
+                    last_claim_time: 0,
+                    daily_transferred: 0,
+                    last_transfer_date: 0,
+                    kyc_verified: false,
+                    whitelist_status: whitelisted,
+                    staked_amount: 0,
+                    staking_rewards: 0,
+                    last_reward_claim: 0
+                };
+                move_to(&account::create_signer(user_addr), user_info);
+            } else {
+                let user_info = borrow_global_mut<UserTokenInfo>(user_addr);
+                user_info.whitelist_status = whitelisted;
+            };
+            
+            i = i + 1;
+        }
+    }
+    
+    // 헬퍼 함수들
+    
+    /// 최대 인플레이션 공급량 계산
+    fun calculate_max_inflated_supply(
+        initial_supply: u64,
+        inflation_rate: u64,  // basis points per year
+        time_elapsed: u64     // seconds
+    ): u64 {
+        let years_elapsed = time_elapsed / (365 * 24 * 3600);
+        let inflation_factor = 10000 + (inflation_rate * years_elapsed);
+        (initial_supply * inflation_factor) / 10000
+    }
+    
+    /// 베스팅 클레임 가능 금액 계산
+    fun calculate_claimable_amount(
+        user_info: &UserTokenInfo,
+        schedule: &VestingSchedule,
+        current_time: u64
+    ): u64 {
+        let time_since_start = current_time - user_info.vesting_start_time;
+        let time_since_cliff = time_since_start - schedule.cliff_duration;
+        
+        if (time_since_cliff < 0) {
+            return 0
+        };
+        
+        let total_vested = user_info.vested_amount;
+        
+        // 즉시 언락 부분
+        let immediate_unlock = (total_vested * schedule.unlock_percentage) / 10000;
+        
+        // 베스팅 부분
+        let vesting_amount = total_vested - immediate_unlock;
+        
+        let vested_portion = if (time_since_cliff >= schedule.vesting_duration) {
+            vesting_amount
+        } else if (schedule.linear_vesting) {
+            (vesting_amount * time_since_cliff) / schedule.vesting_duration
+        } else {
+            // 단계적 베스팅 (월별)
+            let months_passed = time_since_cliff / (30 * 24 * 3600);
+            let total_months = schedule.vesting_duration / (30 * 24 * 3600);
+            (vesting_amount * months_passed) / total_months
+        };
+        
+        let total_claimable = immediate_unlock + vested_portion;
+        
+        // 이미 클레임한 금액 제외 계산 (단순화를 위해 생략)
+        total_claimable
+    }
+    
+    /// 스테이킹 보상 계산
+    fun calculate_staking_rewards(
+        user_info: &UserTokenInfo,
+        current_time: u64
+    ): u64 {
+        if (user_info.staked_amount == 0 || user_info.last_reward_claim >= current_time) {
+            return 0
+        };
+        
+        let time_elapsed = current_time - user_info.last_reward_claim;
+        let annual_reward_rate = 1000; // 10% APY in basis points
+        
+        // 연간 보상률을 초 단위로 변환하여 계산
+        let reward = (user_info.staked_amount * annual_reward_rate * time_elapsed) / 
+                    (10000 * 365 * 24 * 3600);
+        
+        reward
+    }
+    
+    // 조회 함수들
+    
+    /// 토큰 관리자 정보 조회
+    public fun get_token_manager_info(
+        token_metadata: Object<Metadata>
+    ): TokenManagerInfo acquires AdvancedTokenManager {
+        let token_addr = object::object_address(&token_metadata);
+        let manager = borrow_global<AdvancedTokenManager>(token_addr);
+        
+        TokenManagerInfo {
+            creator: manager.creator,
+            is_paused: manager.is_paused,
+            max_supply: manager.max_supply,
+            current_supply: manager.current_supply,
+            total_minted: manager.total_minted,
+            total_burned: manager.total_burned,
+            unique_holders: manager.unique_holders,
+            inflation_rate: manager.inflation_rate,
+            deflation_rate: manager.deflation_rate,
+            fee_on_transfer: manager.fee_on_transfer,
+            created_at: manager.created_at,
+            last_updated: manager.last_updated
+        }
+    }
+    
+    /// 사용자 토큰 정보 조회
+    public fun get_user_token_info(
+        user_addr: address,
+        token_metadata: Object<Metadata>
+    ): Option<UserTokenInfo> acquires UserTokenInfo {
+        if (exists<UserTokenInfo>(user_addr)) {
+            let user_info = borrow_global<UserTokenInfo>(user_addr);
+            option::some(*user_info)
+        } else {
+            option::none()
+        }
+    }
+    
+    /// 확장 메타데이터 조회
+    public fun get_extended_metadata(
+        token_metadata: Object<Metadata>
+    ): ExtendedMetadata acquires AdvancedTokenManager {
+        let token_addr = object::object_address(&token_metadata);
+        let manager = borrow_global<AdvancedTokenManager>(token_addr);
+        manager.extended_metadata
+    }
+    
+    /// 토큰 통계 조회
+    public fun get_token_statistics(
+        token_metadata: Object<Metadata>
+    ): TokenStatistics acquires AdvancedTokenManager {
+        let token_addr = object::object_address(&token_metadata);
+        let manager = borrow_global<AdvancedTokenManager>(token_addr);
+        
+        let total_supply = fungible_asset::supply(token_metadata);
+        let circulating_supply = if (option::is_some(&total_supply)) {
+            *option::borrow(&total_supply)
+        } else {
+            0
+        };
+        
+        TokenStatistics {
+            total_supply: circulating_supply,
+            circulating_supply: manager.current_supply,
+            max_supply: manager.max_supply,
+            total_minted: manager.total_minted,
+            total_burned: manager.total_burned,
+            unique_holders: manager.unique_holders,
+            market_cap: 0, // 실제로는 오라클에서 가격 조회
+            volume_24h: 0, // 실제로는 별도 통계 시스템에서 조회
+            price_change_24h: 0
+        }
+    }
+    
+    // 구조체 정의들
+    
+    struct TokenManagerInfo has drop {
+        creator: address,
+        is_paused: bool,
+        max_supply: Option<u64>,
+        current_supply: u64,
+        total_minted: u64,
+        total_burned: u64,
+        unique_holders: u64,
+        inflation_rate: u64,
+        deflation_rate: u64,
+        fee_on_transfer: u64,
+        created_at: u64,
+        last_updated: u64
+    }
+    
+    struct TokenStatistics has drop {
+        total_supply: u64,
+        circulating_supply: u64,
+        max_supply: Option<u64>,
+        total_minted: u64,
+        total_burned: u64,
+        unique_holders: u64,
+        market_cap: u64,
+        volume_24h: u64,
+        price_change_24h: i64
+    }
+    
+    // 에러 코드
+    const E_INVALID_NAME: u64 = 1;
+    const E_INVALID_SYMBOL: u64 = 2;
+    const E_INVALID_DECIMALS: u64 = 3;
+    const E_EXCEEDS_MAX_SUPPLY: u64 = 4;
+    const E_NOT_AUTHORIZED_MINTER: u64 = 5;
+    const E_TOKEN_PAUSED: u64 = 6;
+    const E_INFLATION_LIMIT_EXCEEDED: u64 = 7;
+    const E_TRADING_NOT_STARTED: u64 = 8;
+    const E_KYC_REQUIRED: u64 = 9;
+    const E_NOT_WHITELISTED: u64 = 10;
+    const E_EXCEEDS_MAX_TRANSFER: u64 = 11;
+    const E_DAILY_LIMIT_EXCEEDED: u64 = 12;
+    const E_USER_INFO_NOT_FOUND: u64 = 13;
+    const E_NO_VESTED_TOKENS: u64 = 14;
+    const E_NO_VESTING_SCHEDULE: u64 = 15;
+    const E_CLIFF_NOT_REACHED: u64 = 16;
+    const E_NO_CLAIMABLE_TOKENS: u64 = 17;
+    const E_INVALID_AMOUNT: u64 = 18;
+    const E_INSUFFICIENT_BALANCE: u64 = 19;
+    const E_INSUFFICIENT_STAKED: u64 = 20;
+    const E_NO_REWARDS: u64 = 21;
+    const E_NOT_AUTHORIZED: u64 = 22;
+}
+```
+
+## 🚀 TypeScript SDK 통합
+
+> *Complete SDK integration and automation features - Designed by bookiroad*
+
+### Fungible Asset 관리 클래스
+```typescript
+import {
+  MovementAccount,
+  MovementClient,
+  Network,
+  HexString
+} from "@movementnetwork/ts-sdk";
+
+interface TokenConfig {
+  name: string;
+  symbol: string;
+  decimals: number;
+  iconUri: string;
+  projectUri: string;
+  initialSupply: number;
+  maxSupply?: number;
+  extendedMetadata: ExtendedMetadata;
+}
+
+interface ExtendedMetadata {
+  description: string;
+  externalUrl: string;
+  logoUrl: string;
+  category: string;
+  tags: string[];
+  website?: string;
+  twitter?: string;
+  discord?: string;
+  initialSupply: number;
+  vestingSchedule?: VestingSchedule;
+  transferRestrictions: TransferRestrictions;
+}
+
+interface VestingSchedule {
+  cliffDuration: number;      // seconds
+  vestingDuration: number;    // seconds
+  unlockPercentage: number;   // basis points
+  linearVesting: boolean;
+}
+
+interface TransferRestrictions {
+  whitelistEnabled: boolean;
+  blacklistEnabled: boolean;
+  maxTransferAmount?: number;
+  dailyTransferLimit?: number;
+  requireKyc: boolean;
+  tradingStartTime?: number;
+}
+
+class MovementTokenManager {
+  private client: MovementClient;
+  private moduleAddress: string;
+  
+  constructor(client: MovementClient, moduleAddress: string) {
+    this.client = client;
+    this.moduleAddress = moduleAddress;
+  }
+  
+  // 고급 토큰 생성
+  async createAdvancedToken(
+    creator: MovementAccount,
+    config: TokenConfig
+  ): Promise<{
+    tokenAddress: string;
+    transactionHash: string;
+    metadata: any;
+  }> {
+    const extendedMetadataBytes = this.serializeExtendedMetadata(config.extendedMetadata);
+    
+    const payload = {
+      type: "entry_function_payload",
+      function: `${this.moduleAddress}::advanced_fa::create_advanced_token`,
+      type_arguments: [],
+      arguments: [
+        config.name,
+        config.symbol,
+        config.decimals,
+        config.iconUri,
+        config.projectUri,
+        config.initialSupply.toString(),
+        config.maxSupply ? [config.maxSupply.toString()] : [],
+        extendedMetadataBytes
+      ]
+    };
+    
+    const txn = await this.client.generateTransaction(creator.address(), payload);
+    const signedTxn = await this.client.signTransaction(creator, txn);
+    const response = await this.client.submitTransaction(signedTxn);
+    
+    await this.client.waitForTransaction(response.hash);
+    
+    // 토큰 주소 추출
+    const tokenAddress = await this.extractTokenAddress(response.hash);
+    
+    return {
+      tokenAddress,
+      transactionHash: response.hash,
+      metadata: config.extendedMetadata
+    };
+  }
+  
+  // 조건부 민팅
+  async advancedMint(
+    minter: MovementAccount,
+    tokenAddress: string,
+    to: string,
+    amount: number,
+    reason: string
+  ): Promise<string> {
+    const payload = {
+      type: "entry_function_payload",
+      function: `${this.moduleAddress}::advanced_fa::advanced_mint`,
+      type_arguments: [],
+      arguments: [
+        tokenAddress,
+        to,
+        amount.toString(),
+        reason
+      ]
+    };
+    
+    const txn = await this.client.generateTransaction(minter.address(), payload);
+    const signedTxn = await this.client.signTransaction(minter, txn);
+    const response = await this.client.submitTransaction(signedTxn);
+    
+    await this.client.waitForTransaction(response.hash);
+    return response.hash;
+  }
+  
+  // 조건부 전송
+  async conditionalTransfer(
+    from: MovementAccount,
+    tokenAddress: string,
+    to: string,
+    amount: number
+  ): Promise<{
+    success: boolean;
+    transactionHash?: string;
+    error?: string;
+  }> {
+    try {
+      const payload = {
+        type: "entry_function_payload",
+        function: `${this.moduleAddress}::advanced_fa::conditional_transfer`,
+        type_arguments: [],
+        arguments: [
+          tokenAddress,
+          to,
+          amount.toString()
+        ]
+      };
+      
+      const txn = await this.client.generateTransaction(from.address(), payload);
+      const signedTxn = await this.client.signTransaction(from, txn);
+      const response = await this.client.submitTransaction(signedTxn);
+      
+      await this.client.waitForTransaction(response.hash);
+      
+      return {
+        success: true,
+        transactionHash: response.hash
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+  
+  // 스테이킹
+  async stakeTokens(
+    user: MovementAccount,
+    tokenAddress: string,
+    amount: number
+  ): Promise<string> {
+    const payload = {
+      type: "entry_function_payload",
+      function: `${this.moduleAddress}::advanced_fa::stake_tokens`,
+      type_arguments: [],
+      arguments: [
+        tokenAddress,
+        amount.toString()
+      ]
+    };
+    
+    const txn = await this.client.generateTransaction(user.address(), payload);
+    const signedTxn = await this.client.signTransaction(user, txn);
+    const response = await this.client.submitTransaction(signedTxn);
+    
+    await this.client.waitForTransaction(response.hash);
+    return response.hash;
+  }
+  
+  // 스테이킹 해제
+  async unstakeTokens(
+    user: MovementAccount,
+    tokenAddress: string,
+    amount: number
+  ): Promise<string> {
+    const payload = {
+      type: "entry_function_payload",
+      function: `${this.moduleAddress}::advanced_fa::unstake_tokens`,
+      type_arguments: [],
+      arguments: [
+        tokenAddress,
+        amount.toString()
+      ]
+    };
+    
+    const txn = await this.client.generateTransaction(user.address(), payload);
+    const signedTxn = await this.client.signTransaction(user, txn);
+    const response = await this.client.submitTransaction(signedTxn);
+    
+    await this.client.waitForTransaction(response.hash);
+    return response.hash;
+  }
+  
+  // 베스팅 토큰 클레임
+  async claimVestedTokens(
+    user: MovementAccount,
+    tokenAddress: string
+  ): Promise<{
+    success: boolean;
+    claimedAmount: number;
+    transactionHash?: string;
+  }> {
+    try {
+      const payload = {
+        type: "entry_function_payload",
+        function: `${this.moduleAddress}::advanced_fa::claim_vested_tokens`,
+        type_arguments: [],
+        arguments: [tokenAddress]
+      };
+      
+      const txn = await this.client.generateTransaction(user.address(), payload);
+      const signedTxn = await this.client.signTransaction(user, txn);
+      const response = await this.client.submitTransaction(signedTxn);
+      
+      await this.client.waitForTransaction(response.hash);
+      
+      // 이벤트에서 클레임된 금액 추출
+      const claimedAmount = await this.extractClaimedAmount(response.hash);
+      
+      return {
+        success: true,
+        claimedAmount,
+        transactionHash: response.hash
+      };
+    } catch (error) {
+      return {
+        success: false,
+        claimedAmount: 0
+      };
+    }
+  }
+  
+  // 스테이킹 보상 클레임
+  async claimStakingRewards(
+    user: MovementAccount,
+    tokenAddress: string
+  ): Promise<{
+    success: boolean;
+    rewardAmount: number;
+    transactionHash?: string;
+  }> {
+    try {
+      const payload = {
+        type: "entry_function_payload",
+        function: `${this.moduleAddress}::advanced_fa::claim_staking_rewards`,
+        type_arguments: [],
+        arguments: [tokenAddress]
+      };
+      
+      const txn = await this.client.generateTransaction(user.address(), payload);
+      const signedTxn = await this.client.signTransaction(user, txn);
+      const response = await this.client.submitTransaction(signedTxn);
+      
+      await this.client.waitForTransaction(response.hash);
+      
+      const rewardAmount = await this.extractRewardAmount(response.hash);
+      
+      return {
+        success: true,
+        rewardAmount,
+        transactionHash: response.hash
+      };
+    } catch (error) {
+      return {
+        success: false,
+        rewardAmount: 0
+      };
+    }
+  }
+  
+  // 거버넌스 투표력 조회
+  async getVotingPower(
+    userAddress: string,
+    tokenAddress: string
+  ): Promise<number> {
+    const payload = {
+      function: `${this.moduleAddress}::advanced_fa::get_voting_power`,
+      type_arguments: [],
+      arguments: [userAddress, tokenAddress]
+    };
+    
+    try {
+      const result = await this.client.view(payload);
+      return parseInt(result[0] as string);
+    } catch (error) {
+      console.error("Failed to get voting power:", error);
+      return 0;
+    }
+  }
+  
+  // KYC 상태 업데이트 (관리자 전용)
+  async updateKycStatus(
+    admin: MovementAccount,
+    tokenAddress: string,
+    userAddress: string,
+    kycVerified: boolean
+  ): Promise<string> {
+    const payload = {
+      type: "entry_function_payload",
+      function: `${this.moduleAddress}::advanced_fa::update_kyc_status`,
+      type_arguments: [],
+      arguments: [
+        tokenAddress,
+        userAddress,
+        kycVerified
+      ]
+    };
+    
+    const txn = await this.client.generateTransaction(admin.address(), payload);
+    const signedTxn = await this.client.signTransaction(admin, txn);
+    const response = await this.client.submitTransaction(signedTxn);
+    
+    await this.client.waitForTransaction(response.hash);
+    return response.hash;
+  }
+  
+  // 화이트리스트 배치 업데이트
+  async batchUpdateWhitelist(
+    admin: MovementAccount,
+    tokenAddress: string,
+    users: string[],
+    whitelisted: boolean
+  ): Promise<string> {
+    const payload = {
+      type: "entry_function_payload",
+      function: `${this.moduleAddress}::advanced_fa::update_whitelist_status`,
+      type_arguments: [],
+      arguments: [
+        tokenAddress,
+        users,
+        whitelisted
+      ]
+    };
+    
+    const txn = await this.client.generateTransaction(admin.address(), payload);
+    const signedTxn = await this.client.signTransaction(admin, txn);
+    const response = await this.client.submitTransaction(signedTxn);
+    
+    await this.client.waitForTransaction(response.hash);
+    return response.hash;
+  }
+  
+  // 토큰 정보 조회
+  async getTokenInfo(tokenAddress: string): Promise<any> {
+    const payload = {
+      function: `${this.moduleAddress}::advanced_fa::get_token_manager_info`,
+      type_arguments: [],
+      arguments: [tokenAddress]
+    };
+    
+    try {
+      const result = await this.client.view(payload);
+      return this.parseTokenManagerInfo(result[0]);
+    } catch (error) {
+      console.error("Failed to get token info:", error);
+      return null;
+    }
+  }
+  
+  // 사용자 토큰 정보 조회
+  async getUserTokenInfo(
+    userAddress: string,
+    tokenAddress: string
+  ): Promise<any> {
+    const payload = {
+      function: `${this.moduleAddress}::advanced_fa::get_user_token_info`,
+      type_arguments: [],
+      arguments: [userAddress, tokenAddress]
+    };
+    
+    try {
+      const result = await this.client.view(payload);
+      if (result && result[0]) {
+        return this.parseUserTokenInfo(result[0]);
+      }
+      return null;
+    } catch (error) {
+      console.error("Failed to get user token info:", error);
+      return null;
+    }
+  }
+  
+  // 토큰 통계 조회
+  async getTokenStatistics(tokenAddress: string): Promise<any> {
+    const payload = {
+      function: `${this.moduleAddress}::advanced_fa::get_token_statistics`,
+      type_arguments: [],
+      arguments: [tokenAddress]
+    };
+    
+    try {
+      const result = await this.client.view(payload);
+      return this.parseTokenStatistics(result[0]);
+    } catch (error) {
+      console.error("Failed to get token statistics:", error);
+      return null;
+    }
+  }
+  
+  // 토큰 이벤트 모니터링
+  async monitorTokenEvents(
+    tokenAddress: string,
+    callback: (event: any) => void,
+    eventTypes?: string[]
+  ): Promise<void> {
+    // 실제로는 WebSocket 또는 polling을 통한 이벤트 모니터링
+    const pollInterval = 5000; // 5초마다
+    
+    const poll = async () => {
+      try {
+        // 최근 이벤트 조회
+        const events = await this.getRecentEvents(tokenAddress, eventTypes);
+        events.forEach(callback);
+      } catch (error) {
+        console.error("Failed to poll events:", error);
+      }
+      
+      setTimeout(poll, pollInterval);
+    };
+    
+    poll();
+  }
+  
+  // 유틸리티 함수들
+  
+  private serializeExtendedMetadata(metadata: ExtendedMetadata): any {
+    return {
+      description: metadata.description,
+      external_url: metadata.externalUrl,
+      logo_url: metadata.logoUrl,
+      banner_url: "",
+      category: metadata.category,
+      tags: metadata.tags,
+      website: metadata.website || "",
+      twitter: metadata.twitter || "",
+      discord: metadata.discord || "",
+      telegram: "",
+      contract_version: "1.0.0",
+      audit_reports: [],
+      initial_supply: metadata.initialSupply,
+      circulating_supply: metadata.initialSupply,
+      vesting_schedule: metadata.vestingSchedule ? {
+        cliff_duration: metadata.vestingSchedule.cliffDuration,
+        vesting_duration: metadata.vestingSchedule.vestingDuration,
+        unlock_percentage: metadata.vestingSchedule.unlockPercentage,
+        linear_vesting: metadata.vestingSchedule.linearVesting
+      } : null,
+      transfer_restrictions: {
+        whitelist_enabled: metadata.transferRestrictions.whitelistEnabled,
+        blacklist_enabled: metadata.transferRestrictions.blacklistEnabled,
+        max_transfer_amount: metadata.transferRestrictions.maxTransferAmount || null,
+        daily_transfer_limit: metadata.transferRestrictions.dailyTransferLimit || null,
+        require_kyc: metadata.transferRestrictions.requireKyc,
+        trading_start_time: metadata.transferRestrictions.tradingStartTime || null
+      }
+    };
+  }
+  
+  private async extractTokenAddress(txHash: string): Promise<string> {
+    // 트랜잭션 결과에서 토큰 주소 추출
+    const txResult = await this.client.getTransactionByHash(txHash);
+    // 실제로는 이벤트나 변경사항에서 주소 추출
+    return "0x123..."; // placeholder
+  }
+  
+  private async extractClaimedAmount(txHash: string): Promise<number> {
+    // 트랜잭션 이벤트에서 클레임된 금액 추출
+    return 1000; // placeholder
+  }
+  
+  private async extractRewardAmount(txHash: string): Promise<number> {
+    // 트랜잭션 이벤트에서 보상 금액 추출
+    return 500; // placeholder
+  }
+  
+  private parseTokenManagerInfo(data: any): any {
+    return {
+      creator: data.creator,
+      isPaused: data.is_paused,
+      maxSupply: data.max_supply,
+      currentSupply: parseInt(data.current_supply),
+      totalMinted: parseInt(data.total_minted),
+      totalBurned: parseInt(data.total_burned),
+      uniqueHolders: parseInt(data.unique_holders),
+      inflationRate: parseInt(data.inflation_rate),
+      deflationRate: parseInt(data.deflation_rate),
+      feeOnTransfer: parseInt(data.fee_on_transfer),
+      createdAt: parseInt(data.created_at),
+      lastUpdated: parseInt(data.last_updated)
+    };
+  }
+  
+  private parseUserTokenInfo(data: any): any {
+    return {
+      balance: parseInt(data.balance),
+      lockedBalance: parseInt(data.locked_balance),
+      vestedAmount: parseInt(data.vested_amount),
+      stakingRewards: parseInt(data.staking_rewards),
+      stakedAmount: parseInt(data.staked_amount),
+      kycVerified: data.kyc_verified,
+      whitelistStatus: data.whitelist_status
+    };
+  }
+  
+  private parseTokenStatistics(data: any): any {
+    return {
+      totalSupply: parseInt(data.total_supply),
+      circulatingSupply: parseInt(data.circulating_supply),
+      maxSupply: data.max_supply,
+      totalMinted: parseInt(data.total_minted),
+      totalBurned: parseInt(data.total_burned),
+      uniqueHolders: parseInt(data.unique_holders),
+      marketCap: parseInt(data.market_cap),
+      volume24h: parseInt(data.volume_24h),
+      priceChange24h: parseInt(data.price_change_24h)
+    };
+  }
+  
+  private async getRecentEvents(
+    tokenAddress: string,
+    eventTypes?: string[]
+  ): Promise<any[]> {
+    // 실제로는 인덱서나 이벤트 API에서 조회
+    return []; // placeholder
+  }
+}
+
+// 사용 예시
+async function setupAdvancedToken() {
+  const client = new MovementClient({ network: Network.DEVNET });
+  const creator = new MovementAccount();
+  const tokenManager = new MovementTokenManager(client, "0x1");
+  
+  // 1. 고급 토큰 생성
+  const tokenConfig: TokenConfig = {
+    name: "Advanced Governance Token",
+    symbol: "AGT",
+    decimals: 8,
+    iconUri: "https://example.com/agt-icon.png",
+    projectUri: "https://example.com/agt-project",
+    initialSupply: 1000000 * 10**8, // 1M tokens
+    maxSupply: 10000000 * 10**8,    // 10M max supply
+    extendedMetadata: {
+      description: "A governance token with advanced features",
+      externalUrl: "https://example.com",
+      logoUrl: "https://example.com/logo.png",
+      category: "governance",
+      tags: ["defi", "governance", "dao"],
+      website: "https://example.com",
+      twitter: "https://twitter.com/example",
+      initialSupply: 1000000 * 10**8,
+      vestingSchedule: {
+        cliffDuration: 365 * 24 * 3600, // 1 year cliff
+        vestingDuration: 4 * 365 * 24 * 3600, // 4 years vesting
+        unlockPercentage: 1000, // 10% immediate unlock
+        linearVesting: true
+      },
+      transferRestrictions: {
+        whitelistEnabled: true,
+        blacklistEnabled: false,
+        maxTransferAmount: 100000 * 10**8, // 100K max per transfer
+        dailyTransferLimit: 1000000 * 10**8, // 1M daily limit
+        requireKyc: true,
+        tradingStartTime: Date.now() / 1000 + 30 * 24 * 3600 // 30 days from now
+      }
+    }
+  };
+  
+  const { tokenAddress } = await tokenManager.createAdvancedToken(creator, tokenConfig);
+  console.log("Advanced token created:", tokenAddress);
+  
+  // 2. 토큰 정보 조회
+  const tokenInfo = await tokenManager.getTokenInfo(tokenAddress);
+  console.log("Token info:", tokenInfo);
+  
+  // 3. 이벤트 모니터링 시작
+  await tokenManager.monitorTokenEvents(
+    tokenAddress,
+    (event) => {
+      console.log("Token event:", event);
+    },
+    ["mint", "transfer", "stake", "reward_claim"]
+  );
+}
+```
+
+## 🔗 다음 단계
+
+Fungible Asset 프레임워크를 마스터했다면:
+
+**[Lending & Borrowing 시스템 →](/dapp-development/defi-development/lending-borrowing-system)**
+
+## 📚 참고 자료
+
+- [Movement 개발자 포털](https://developer.movementnetwork.xyz/)
+- [Fungible Asset 표준](https://docs.movementnetwork.xyz/fungible-assets)
+- [토큰 경제학 가이드](https://docs.movementnetwork.xyz/tokenomics)
+
+---
+
+*Movement Network에서 차세대 토큰 시스템을 구축하세요! 🪙✨*

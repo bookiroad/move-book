@@ -1,0 +1,2714 @@
+# 🔄 DEX & AMM 구현
+
+Movement Network에서 탈중앙화 거래소와 자동화된 마켓 메이커를 구축하는 완전한 가이드입니다. 다양한 AMM 알고리즘부터 고급 거래 기능까지, 효율적이고 안전한 DEX를 만들어봅니다.
+
+## 🎯 학습 목표
+
+이 섹션을 완료하면:
+- 다양한 AMM 알고리즘을 구현할 수 있습니다
+- 집중 유동성과 범위 주문을 설계할 수 있습니다
+- MEV 보호 및 차익거래 방지를 구축할 수 있습니다
+- 고급 라우팅 알고리즘을 개발할 수 있습니다
+- 거버넌스 토큰과 수수료 분배를 구현할 수 있습니다
+
+## 🌊 종합 DEX 플랫폼 구현
+
+### 멀티 AMM DEX 아키텍처
+```move
+module dex_platform::comprehensive_dex {
+    use std::signer;
+    use std::string::{Self, String};
+    use std::vector;
+    use std::option::{Self, Option};
+    use aptos_framework::fungible_asset::{Self, FungibleAsset, Metadata};
+    use aptos_framework::primary_fungible_store;
+    use aptos_framework::object::{Self, Object};
+    use aptos_framework::timestamp;
+    use aptos_framework::event::{Self, EventHandle};
+    use aptos_std::smart_table::{Self, SmartTable};
+    use aptos_std::math64;
+    use aptos_std::math128;
+    
+    /// 종합 DEX 플랫폼
+    struct DEXPlatform has key {
+        // 플랫폼 정보
+        admin: address,
+        platform_name: String,
+        
+        // 지원하는 AMM 타입
+        supported_amm_types: SmartTable<String, AMMConfig>,
+        
+        // 유동성 풀들
+        liquidity_pools: SmartTable<PoolKey, LiquidityPool>,
+        
+        // 집중 유동성 풀들
+        concentrated_pools: SmartTable<PoolKey, ConcentratedLiquidityPool>,
+        
+        // 라우팅 정보
+        routing_paths: SmartTable<RoutingKey, vector<PoolKey>>,
+        
+        // 거버넌스
+        governance_token: Option<Object<Metadata>>,
+        fee_collector: address,
+        
+        // 수수료 구조
+        default_fee_rate: u64,           // basis points
+        protocol_fee_share: u64,         // basis points of trading fees
+        
+        // MEV 보호
+        mev_protection_enabled: bool,
+        max_slippage_bps: u64,          // basis points
+        sandwich_protection: bool,
+        
+        // 통계
+        total_volume_24h: u64,
+        total_fees_collected: u64,
+        total_pools: u64,
+        
+        // 이벤트
+        dex_events: EventHandle<DEXEvent>,
+        
+        // 플래시 스왑
+        flash_swap_enabled: bool,
+        flash_swap_fee: u64,            // basis points
+        
+        created_at: u64,
+        last_updated: u64
+    }
+    
+    /// AMM 설정
+    struct AMMConfig has store, drop, copy {
+        amm_type: String,               // "constant_product", "stable_swap", "weighted", etc.
+        fee_tier: u64,                  // basis points
+        tick_spacing: Option<u64>,      // concentrated liquidity용
+        
+        // 알고리즘별 매개변수
+        amplification_factor: Option<u64>,  // stable swap용
+        weights: Option<vector<u64>>,       // weighted pool용
+        
+        // 수수료 분배
+        lp_fee_share: u64,              // LP들에게 가는 비율 (basis points)
+        protocol_fee_share: u64,        // 프로토콜 수수료 비율
+        
+        is_active: bool,
+        created_at: u64
+    }
+    
+    /// 풀 키 (두 토큰의 조합)
+    struct PoolKey has store, drop, copy {
+        token_a: Object<Metadata>,
+        token_b: Object<Metadata>,
+        fee_tier: u64,
+        amm_type: String
+    }
+    
+    /// 라우팅 키
+    struct RoutingKey has store, drop, copy {
+        token_in: Object<Metadata>,
+        token_out: Object<Metadata>
+    }
+    
+    /// 기본 유동성 풀 (Constant Product AMM)
+    struct LiquidityPool has store, drop, copy {
+        // 풀 식별
+        pool_key: PoolKey,
+        
+        // 자산 보유량
+        reserve_a: u64,
+        reserve_b: u64,
+        
+        // LP 토큰
+        lp_token_supply: u64,
+        lp_token_metadata: Object<Metadata>,
+        
+        // 수수료 및 프로토콜 수수료
+        fee_rate: u64,                  // basis points
+        protocol_fee_a: u64,
+        protocol_fee_b: u64,
+        
+        // 가격 오라클 (TWAP)
+        price_0_cumulative_last: u128,
+        price_1_cumulative_last: u128,
+        block_timestamp_last: u64,
+        
+        // 통계
+        total_volume_a: u64,
+        total_volume_b: u64,
+        total_fees_a: u64,
+        total_fees_b: u64,
+        
+        // 유동성 공급자 수
+        lp_count: u64,
+        
+        // 풀 상태
+        is_active: bool,
+        last_updated: u64,
+        created_at: u64
+    }
+    
+    /// 집중 유동성 풀 (Uniswap V3 스타일)
+    struct ConcentratedLiquidityPool has store, drop, copy {
+        // 풀 식별
+        pool_key: PoolKey,
+        
+        // 현재 상태
+        sqrt_price: u128,               // 현재 가격의 제곱근 (Q64.96)
+        tick: i32,                      // 현재 틱
+        liquidity: u128,                // 현재 활성 유동성
+        
+        // 틱 정보
+        tick_spacing: u64,
+        tick_bitmap: SmartTable<i16, u256>,  // 틱 비트맵
+        ticks: SmartTable<i32, TickInfo>,    // 틱별 정보
+        
+        // 포지션 정보
+        positions: SmartTable<u256, Position>,  // 포지션 키 -> 포지션
+        
+        // 수수료 누적
+        fee_growth_global_0: u256,      // 토큰0 글로벌 수수료 누적
+        fee_growth_global_1: u256,      // 토큰1 글로벌 수수료 누적
+        
+        // 프로토콜 수수료
+        protocol_fees_0: u64,
+        protocol_fees_1: u64,
+        
+        // 풀 통계
+        total_value_locked_0: u64,
+        total_value_locked_1: u64,
+        volume_24h_0: u64,
+        volume_24h_1: u64,
+        fees_24h_0: u64,
+        fees_24h_1: u64,
+        
+        // 오라클
+        observation_index: u16,
+        observation_cardinality: u16,
+        observations: SmartTable<u16, Observation>,
+        
+        is_active: bool,
+        last_updated: u64,
+        created_at: u64
+    }
+    
+    /// 틱 정보
+    struct TickInfo has store, drop, copy {
+        liquidity_gross: u128,          // 이 틱에서의 총 유동성
+        liquidity_net: i128,            // 이 틱을 넘을 때의 유동성 변화
+        fee_growth_outside_0: u256,     // 틱 외부의 토큰0 수수료 누적
+        fee_growth_outside_1: u256,     // 틱 외부의 토큰1 수수료 누적
+        seconds_outside: u64,           // 틱 외부에서의 누적 시간
+        initialized: bool               // 틱이 초기화되었는지 여부
+    }
+    
+    /// 집중 유동성 포지션
+    struct Position has store, drop, copy {
+        owner: address,
+        tick_lower: i32,
+        tick_upper: i32,
+        liquidity: u128,
+        fee_growth_inside_0_last: u256,
+        fee_growth_inside_1_last: u256,
+        tokens_owed_0: u64,
+        tokens_owed_1: u64,
+        created_at: u64,
+        last_updated: u64
+    }
+    
+    /// 가격 관찰 데이터 (TWAP용)
+    struct Observation has store, drop, copy {
+        block_timestamp: u64,
+        tick_cumulative: i64,
+        seconds_per_liquidity_cumulative: u160,
+        initialized: bool
+    }
+    
+    /// 스왑 결과
+    struct SwapResult has drop {
+        amount_in: u64,
+        amount_out: u64,
+        sqrt_price_x96_after: u128,
+        liquidity_after: u128,
+        tick_after: i32
+    }
+    
+    /// DEX 이벤트
+    struct DEXEvent has drop, store {
+        event_type: String,
+        user: address,
+        pool_key: PoolKey,
+        amount_0: u64,
+        amount_1: u64,
+        additional_data: String,
+        timestamp: u64
+    }
+    
+    /// DEX 플랫폼 초기화
+    public fun initialize_dex_platform(
+        admin: &signer,
+        platform_name: String,
+        default_fee_rate: u64,
+        protocol_fee_share: u64
+    ) {
+        let admin_addr = signer::address_of(admin);
+        
+        // 입력 검증
+        assert!(default_fee_rate <= 10000, E_INVALID_FEE_RATE); // 최대 100%
+        assert!(protocol_fee_share <= 5000, E_INVALID_PROTOCOL_FEE); // 최대 50%
+        
+        let platform = DEXPlatform {
+            admin: admin_addr,
+            platform_name,
+            supported_amm_types: smart_table::new(),
+            liquidity_pools: smart_table::new(),
+            concentrated_pools: smart_table::new(),
+            routing_paths: smart_table::new(),
+            governance_token: option::none(),
+            fee_collector: admin_addr,
+            default_fee_rate,
+            protocol_fee_share,
+            mev_protection_enabled: true,
+            max_slippage_bps: 1000, // 10%
+            sandwich_protection: true,
+            total_volume_24h: 0,
+            total_fees_collected: 0,
+            total_pools: 0,
+            dex_events: account::new_event_handle<DEXEvent>(admin),
+            flash_swap_enabled: true,
+            flash_swap_fee: 5, // 0.05%
+            created_at: timestamp::now_seconds(),
+            last_updated: timestamp::now_seconds()
+        };
+        
+        move_to(admin, platform);
+        
+        // 기본 AMM 타입들 추가
+        initialize_default_amm_types(&mut platform);
+    }
+    
+    /// 기본 AMM 타입 초기화
+    fun initialize_default_amm_types(platform: &mut DEXPlatform) {
+        // Constant Product AMM (Uniswap V2 스타일)
+        let constant_product_config = AMMConfig {
+            amm_type: string::utf8(b"constant_product"),
+            fee_tier: 300, // 0.3%
+            tick_spacing: option::none(),
+            amplification_factor: option::none(),
+            weights: option::none(),
+            lp_fee_share: 8000, // 80%
+            protocol_fee_share: 2000, // 20%
+            is_active: true,
+            created_at: timestamp::now_seconds()
+        };
+        
+        smart_table::add(&mut platform.supported_amm_types, 
+                        string::utf8(b"constant_product"), 
+                        constant_product_config);
+        
+        // Stable Swap AMM (Curve 스타일)
+        let stable_swap_config = AMMConfig {
+            amm_type: string::utf8(b"stable_swap"),
+            fee_tier: 4, // 0.04%
+            tick_spacing: option::none(),
+            amplification_factor: option::some(200), // A = 200
+            weights: option::none(),
+            lp_fee_share: 8500, // 85%
+            protocol_fee_share: 1500, // 15%
+            is_active: true,
+            created_at: timestamp::now_seconds()
+        };
+        
+        smart_table::add(&mut platform.supported_amm_types, 
+                        string::utf8(b"stable_swap"), 
+                        stable_swap_config);
+        
+        // Concentrated Liquidity AMM (Uniswap V3 스타일)
+        let concentrated_config = AMMConfig {
+            amm_type: string::utf8(b"concentrated"),
+            fee_tier: 500, // 0.05%
+            tick_spacing: option::some(10),
+            amplification_factor: option::none(),
+            weights: option::none(),
+            lp_fee_share: 7000, // 70%
+            protocol_fee_share: 3000, // 30%
+            is_active: true,
+            created_at: timestamp::now_seconds()
+        };
+        
+        smart_table::add(&mut platform.supported_amm_types, 
+                        string::utf8(b"concentrated"), 
+                        concentrated_config);
+    }
+    
+    /// Constant Product 풀 생성
+    public fun create_constant_product_pool(
+        creator: &signer,
+        platform_addr: address,
+        token_a: Object<Metadata>,
+        token_b: Object<Metadata>,
+        fee_tier: u64,
+        initial_amount_a: u64,
+        initial_amount_b: u64
+    ) acquires DEXPlatform {
+        let creator_addr = signer::address_of(creator);
+        let platform = borrow_global_mut<DEXPlatform>(platform_addr);
+        
+        // 토큰 순서 정렬 (작은 주소가 token_a)
+        let (token_0, token_1, amount_0, amount_1) = if (
+            object::object_address(&token_a) < object::object_address(&token_b)
+        ) {
+            (token_a, token_b, initial_amount_a, initial_amount_b)
+        } else {
+            (token_b, token_a, initial_amount_b, initial_amount_a)
+        };
+        
+        let pool_key = PoolKey {
+            token_a: token_0,
+            token_b: token_1,
+            fee_tier,
+            amm_type: string::utf8(b"constant_product")
+        };
+        
+        // 중복 풀 확인
+        assert!(!smart_table::contains(&platform.liquidity_pools, pool_key), E_POOL_ALREADY_EXISTS);
+        
+        // 초기 유동성 확인
+        assert!(amount_0 > 0 && amount_1 > 0, E_INSUFFICIENT_LIQUIDITY);
+        
+        // LP 토큰 생성
+        let lp_token_name = generate_lp_token_name(&token_0, &token_1, fee_tier);
+        let lp_token_metadata = create_lp_token(creator, lp_token_name);
+        
+        // 초기 LP 토큰 공급량 계산 (geometric mean)
+        let initial_lp_supply = math64::sqrt(amount_0 * amount_1);
+        assert!(initial_lp_supply > 1000, E_INSUFFICIENT_LIQUIDITY); // 최소 유동성
+        
+        // 자산 전송
+        let fa_0 = primary_fungible_store::withdraw(creator, token_0, amount_0);
+        let fa_1 = primary_fungible_store::withdraw(creator, token_1, amount_1);
+        
+        // 플랫폼으로 자산 이전 (실제로는 풀 주소로)
+        primary_fungible_store::deposit(platform_addr, fa_0);
+        primary_fungible_store::deposit(platform_addr, fa_1);
+        
+        // LP 토큰 발행
+        mint_lp_tokens(&lp_token_metadata, creator_addr, initial_lp_supply);
+        
+        // 풀 생성
+        let current_time = timestamp::now_seconds();
+        let pool = LiquidityPool {
+            pool_key,
+            reserve_a: amount_0,
+            reserve_b: amount_1,
+            lp_token_supply: initial_lp_supply,
+            lp_token_metadata,
+            fee_rate: fee_tier,
+            protocol_fee_a: 0,
+            protocol_fee_b: 0,
+            price_0_cumulative_last: 0,
+            price_1_cumulative_last: 0,
+            block_timestamp_last: current_time,
+            total_volume_a: 0,
+            total_volume_b: 0,
+            total_fees_a: 0,
+            total_fees_b: 0,
+            lp_count: 1,
+            is_active: true,
+            last_updated: current_time,
+            created_at: current_time
+        };
+        
+        smart_table::add(&mut platform.liquidity_pools, pool_key, pool);
+        platform.total_pools = platform.total_pools + 1;
+        
+        // 이벤트 발생
+        event::emit_event(&mut platform.dex_events, DEXEvent {
+            event_type: string::utf8(b"pool_created"),
+            user: creator_addr,
+            pool_key,
+            amount_0,
+            amount_1,
+            additional_data: string::utf8(b"constant_product"),
+            timestamp: current_time
+        });
+    }
+    
+    /// 유동성 추가
+    public fun add_liquidity(
+        provider: &signer,
+        platform_addr: address,
+        pool_key: PoolKey,
+        amount_a_desired: u64,
+        amount_b_desired: u64,
+        amount_a_min: u64,
+        amount_b_min: u64
+    ): (u64, u64, u64) acquires DEXPlatform {
+        let provider_addr = signer::address_of(provider);
+        let platform = borrow_global_mut<DEXPlatform>(platform_addr);
+        
+        // 풀 존재 확인
+        assert!(smart_table::contains(&platform.liquidity_pools, pool_key), E_POOL_NOT_EXISTS);
+        let pool = smart_table::borrow_mut(&mut platform.liquidity_pools, pool_key);
+        
+        // 최적 수량 계산
+        let (amount_a, amount_b) = calculate_optimal_amounts(
+            pool,
+            amount_a_desired,
+            amount_b_desired,
+            amount_a_min,
+            amount_b_min
+        );
+        
+        // LP 토큰 수량 계산
+        let lp_tokens = if (pool.lp_token_supply == 0) {
+            math64::sqrt(amount_a * amount_b)
+        } else {
+            math64::min(
+                (amount_a * pool.lp_token_supply) / pool.reserve_a,
+                (amount_b * pool.lp_token_supply) / pool.reserve_b
+            )
+        };
+        
+        assert!(lp_tokens > 0, E_INSUFFICIENT_LIQUIDITY_MINTED);
+        
+        // 자산 전송
+        let fa_a = primary_fungible_store::withdraw(provider, pool_key.token_a, amount_a);
+        let fa_b = primary_fungible_store::withdraw(provider, pool_key.token_b, amount_b);
+        
+        primary_fungible_store::deposit(platform_addr, fa_a);
+        primary_fungible_store::deposit(platform_addr, fa_b);
+        
+        // LP 토큰 발행
+        mint_lp_tokens(&pool.lp_token_metadata, provider_addr, lp_tokens);
+        
+        // 풀 상태 업데이트
+        pool.reserve_a = pool.reserve_a + amount_a;
+        pool.reserve_b = pool.reserve_b + amount_b;
+        pool.lp_token_supply = pool.lp_token_supply + lp_tokens;
+        pool.last_updated = timestamp::now_seconds();
+        
+        // 새로운 LP인지 확인
+        if (!is_existing_lp(provider_addr, &pool.lp_token_metadata)) {
+            pool.lp_count = pool.lp_count + 1;
+        };
+        
+        // 이벤트 발생
+        event::emit_event(&mut platform.dex_events, DEXEvent {
+            event_type: string::utf8(b"liquidity_added"),
+            user: provider_addr,
+            pool_key,
+            amount_0: amount_a,
+            amount_1: amount_b,
+            additional_data: lp_tokens.to_string(),
+            timestamp: timestamp::now_seconds()
+        });
+        
+        (amount_a, amount_b, lp_tokens)
+    }
+    
+    /// 정확한 입력으로 스왑
+    public fun swap_exact_input(
+        trader: &signer,
+        platform_addr: address,
+        path: vector<PoolKey>,
+        amount_in: u64,
+        amount_out_min: u64
+    ): u64 acquires DEXPlatform {
+        let trader_addr = signer::address_of(trader);
+        let platform = borrow_global_mut<DEXPlatform>(platform_addr);
+        
+        assert!(!vector::is_empty(&path), E_INVALID_PATH);
+        
+        // MEV 보호 확인
+        if (platform.mev_protection_enabled) {
+            assert!(!detect_sandwich_attack(trader_addr, &path, amount_in), E_MEV_DETECTED);
+        };
+        
+        let mut current_amount = amount_in;
+        let path_length = vector::length(&path);
+        let i = 0;
+        
+        while (i < path_length) {
+            let pool_key = *vector::borrow(&path, i);
+            
+            // 풀 존재 확인
+            assert!(smart_table::contains(&platform.liquidity_pools, pool_key), E_POOL_NOT_EXISTS);
+            let pool = smart_table::borrow_mut(&mut platform.liquidity_pools, pool_key);
+            
+            // 스왑 실행
+            let (amount_out, is_token_a_in) = execute_swap_in_pool(pool, current_amount, i == 0);
+            
+            // 실제 토큰 전송 (첫 번째 스왑에서만 사용자로부터)
+            if (i == 0) {
+                let input_token = if (is_token_a_in) { pool_key.token_a } else { pool_key.token_b };
+                let fa_in = primary_fungible_store::withdraw(trader, input_token, current_amount);
+                primary_fungible_store::deposit(platform_addr, fa_in);
+            };
+            
+            // 출력 토큰 전송 (마지막 스왑에서만 사용자에게)
+            if (i == path_length - 1) {
+                let output_token = if (is_token_a_in) { pool_key.token_b } else { pool_key.token_a };
+                let fa_out = primary_fungible_store::withdraw(
+                    &account::create_signer(platform_addr), 
+                    output_token, 
+                    amount_out
+                );
+                primary_fungible_store::deposit(trader_addr, fa_out);
+            };
+            
+            // 통계 업데이트
+            update_pool_volume_and_oracle(pool, current_amount, amount_out, is_token_a_in);
+            
+            current_amount = amount_out;
+            i = i + 1;
+        };
+        
+        // 최소 출력 확인
+        assert!(current_amount >= amount_out_min, E_INSUFFICIENT_OUTPUT_AMOUNT);
+        
+        // 24시간 볼륨 업데이트
+        platform.total_volume_24h = platform.total_volume_24h + amount_in;
+        
+        // 이벤트 발생
+        event::emit_event(&mut platform.dex_events, DEXEvent {
+            event_type: string::utf8(b"swap"),
+            user: trader_addr,
+            pool_key: *vector::borrow(&path, 0),
+            amount_0: amount_in,
+            amount_1: current_amount,
+            additional_data: string::utf8(b"exact_input"),
+            timestamp: timestamp::now_seconds()
+        });
+        
+        current_amount
+    }
+    
+    /// 플래시 스왑
+    public fun flash_swap(
+        borrower: &signer,
+        platform_addr: address,
+        pool_key: PoolKey,
+        amount_0: u64,
+        amount_1: u64,
+        callback_data: vector<u8>
+    ) acquires DEXPlatform {
+        let borrower_addr = signer::address_of(borrower);
+        let platform = borrow_global_mut<DEXPlatform>(platform_addr);
+        
+        assert!(platform.flash_swap_enabled, E_FLASH_SWAP_DISABLED);
+        assert!(amount_0 > 0 || amount_1 > 0, E_INVALID_AMOUNTS);
+        
+        // 풀 존재 확인
+        assert!(smart_table::contains(&platform.liquidity_pools, pool_key), E_POOL_NOT_EXISTS);
+        let pool = smart_table::borrow_mut(&mut platform.liquidity_pools, pool_key);
+        
+        // 초기 잔액 기록
+        let balance_0_before = pool.reserve_a;
+        let balance_1_before = pool.reserve_b;
+        
+        // 요청된 토큰 전송
+        if (amount_0 > 0) {
+            let fa_0 = primary_fungible_store::withdraw(
+                &account::create_signer(platform_addr), 
+                pool_key.token_a, 
+                amount_0
+            );
+            primary_fungible_store::deposit(borrower_addr, fa_0);
+        };
+        
+        if (amount_1 > 0) {
+            let fa_1 = primary_fungible_store::withdraw(
+                &account::create_signer(platform_addr), 
+                pool_key.token_b, 
+                amount_1
+            );
+            primary_fungible_store::deposit(borrower_addr, fa_1);
+        };
+        
+        // 콜백 실행 (차용자가 임의의 로직 실행)
+        execute_flash_swap_callback(borrower_addr, pool_key, amount_0, amount_1, callback_data);
+        
+        // 상환 확인
+        let balance_0_after = primary_fungible_store::balance(platform_addr, pool_key.token_a);
+        let balance_1_after = primary_fungible_store::balance(platform_addr, pool_key.token_b);
+        
+        // 수수료 계산
+        let fee_0 = if (amount_0 > 0) { (amount_0 * platform.flash_swap_fee) / 10000 } else { 0 };
+        let fee_1 = if (amount_1 > 0) { (amount_1 * platform.flash_swap_fee) / 10000 } else { 0 };
+        
+        // 충분한 상환 확인
+        assert!(balance_0_after >= balance_0_before + fee_0, E_INSUFFICIENT_FLASH_REPAYMENT);
+        assert!(balance_1_after >= balance_1_before + fee_1, E_INSUFFICIENT_FLASH_REPAYMENT);
+        
+        // 풀 상태 업데이트
+        pool.reserve_a = balance_0_after;
+        pool.reserve_b = balance_1_after;
+        pool.protocol_fee_a = pool.protocol_fee_a + fee_0;
+        pool.protocol_fee_b = pool.protocol_fee_b + fee_1;
+        
+        platform.total_fees_collected = platform.total_fees_collected + fee_0 + fee_1;
+        
+        // 이벤트 발생
+        event::emit_event(&mut platform.dex_events, DEXEvent {
+            event_type: string::utf8(b"flash_swap"),
+            user: borrower_addr,
+            pool_key,
+            amount_0,
+            amount_1,
+            additional_data: string::utf8(b""),
+            timestamp: timestamp::now_seconds()
+        });
+    }
+}
+```
+
+## 🎯 집중 유동성 구현 (Uniswap V3 스타일)
+
+> *Advanced concentrated liquidity system - Designed by bookiroad*
+
+### 고급 집중 유동성 시스템
+```move
+module concentrated_liquidity::advanced_v3 {
+    use std::signer;
+    use std::vector;
+    use aptos_framework::object::Object;
+    use aptos_framework::fungible_asset::Metadata;
+    use aptos_std::math128;
+    use aptos_std::smart_table::{Self, SmartTable};
+    
+    /// 집중 유동성 포지션 생성
+    public fun mint_position(
+        provider: &signer,
+        platform_addr: address,
+        pool_key: PoolKey,
+        tick_lower: i32,
+        tick_upper: i32,
+        amount_0_desired: u64,
+        amount_1_desired: u64,
+        amount_0_min: u64,
+        amount_1_min: u64
+    ): (u256, u128, u64, u64) acquires DEXPlatform {
+        let provider_addr = signer::address_of(provider);
+        let platform = borrow_global_mut<DEXPlatform>(platform_addr);
+        
+        // 풀 존재 확인
+        assert!(smart_table::contains(&platform.concentrated_pools, pool_key), E_POOL_NOT_EXISTS);
+        let pool = smart_table::borrow_mut(&mut platform.concentrated_pools, pool_key);
+        
+        // 틱 범위 검증
+        validate_tick_range(tick_lower, tick_upper, pool.tick_spacing);
+        
+        // 유동성 계산
+        let liquidity = calculate_liquidity_for_amounts(
+            pool.sqrt_price,
+            get_sqrt_ratio_at_tick(tick_lower),
+            get_sqrt_ratio_at_tick(tick_upper),
+            amount_0_desired,
+            amount_1_desired
+        );
+        
+        assert!(liquidity > 0, E_INSUFFICIENT_LIQUIDITY);
+        
+        // 실제 필요한 토큰 양 계산
+        let (amount_0, amount_1) = get_amounts_for_liquidity(
+            pool.sqrt_price,
+            get_sqrt_ratio_at_tick(tick_lower),
+            get_sqrt_ratio_at_tick(tick_upper),
+            liquidity
+        );
+        
+        assert!(amount_0 >= amount_0_min, E_INSUFFICIENT_A_AMOUNT);
+        assert!(amount_1 >= amount_1_min, E_INSUFFICIENT_B_AMOUNT);
+        
+        // 토큰 전송
+        if (amount_0 > 0) {
+            let fa_0 = primary_fungible_store::withdraw(provider, pool_key.token_a, amount_0);
+            primary_fungible_store::deposit(platform_addr, fa_0);
+        };
+        
+        if (amount_1 > 0) {
+            let fa_1 = primary_fungible_store::withdraw(provider, pool_key.token_b, amount_1);
+            primary_fungible_store::deposit(platform_addr, fa_1);
+        };
+        
+        // 포지션 생성
+        let position_key = generate_position_key(provider_addr, tick_lower, tick_upper);
+        let position = Position {
+            owner: provider_addr,
+            tick_lower,
+            tick_upper,
+            liquidity,
+            fee_growth_inside_0_last: get_fee_growth_inside_0(pool, tick_lower, tick_upper),
+            fee_growth_inside_1_last: get_fee_growth_inside_1(pool, tick_lower, tick_upper),
+            tokens_owed_0: 0,
+            tokens_owed_1: 0,
+            created_at: timestamp::now_seconds(),
+            last_updated: timestamp::now_seconds()
+        };
+        
+        smart_table::add(&mut pool.positions, position_key, position);
+        
+        // 틱 업데이트
+        update_position_ticks(pool, tick_lower, tick_upper, liquidity, true);
+        
+        // 현재 틱 범위에 있으면 글로벌 유동성 업데이트
+        if (tick_lower <= pool.tick && pool.tick < tick_upper) {
+            pool.liquidity = pool.liquidity + liquidity;
+        };
+        
+        // 통계 업데이트
+        pool.total_value_locked_0 = pool.total_value_locked_0 + amount_0;
+        pool.total_value_locked_1 = pool.total_value_locked_1 + amount_1;
+        
+        (position_key, liquidity, amount_0, amount_1)
+    }
+    
+    /// 집중 유동성 스왑
+    public fun swap_concentrated(
+        trader: &signer,
+        platform_addr: address,
+        pool_key: PoolKey,
+        zero_for_one: bool,
+        amount_specified: i64,
+        sqrt_price_limit_x96: u128
+    ): SwapResult acquires DEXPlatform {
+        let trader_addr = signer::address_of(trader);
+        let platform = borrow_global_mut<DEXPlatform>(platform_addr);
+        
+        assert!(smart_table::contains(&platform.concentrated_pools, pool_key), E_POOL_NOT_EXISTS);
+        let pool = smart_table::borrow_mut(&mut platform.concentrated_pools, pool_key);
+        
+        // 스왑 상태 초기화
+        let mut state = SwapState {
+            amount_specified_remaining: amount_specified,
+            amount_calculated: 0,
+            sqrt_price_x96: pool.sqrt_price,
+            tick: pool.tick,
+            fee_growth_global_x128: if (zero_for_one) { 
+                pool.fee_growth_global_1 
+            } else { 
+                pool.fee_growth_global_0 
+            },
+            protocol_fee: 0,
+            liquidity: pool.liquidity
+        };
+        
+        // 스왑 실행
+        while (state.amount_specified_remaining != 0 && state.sqrt_price_x96 != sqrt_price_limit_x96) {
+            let step = compute_swap_step(
+                state.sqrt_price_x96,
+                get_next_sqrt_price_from_input(
+                    state.sqrt_price_x96,
+                    state.liquidity,
+                    state.amount_specified_remaining,
+                    zero_for_one
+                ),
+                state.liquidity,
+                state.amount_specified_remaining,
+                pool_key.fee_tier
+            );
+            
+            // 상태 업데이트
+            state.sqrt_price_x96 = step.sqrt_price_next_x96;
+            state.amount_specified_remaining = state.amount_specified_remaining - step.amount_in;
+            state.amount_calculated = state.amount_calculated + step.amount_out;
+            
+            // 수수료 누적
+            if (state.liquidity > 0) {
+                state.fee_growth_global_x128 = state.fee_growth_global_x128 + 
+                    ((step.fee_amount as u256) << 128) / (state.liquidity as u256);
+            };
+            
+            // 틱 경계 처리
+            if (state.sqrt_price_x96 == step.sqrt_price_next_x96) {
+                let next_tick = if (zero_for_one) {
+                    get_tick_at_sqrt_ratio(step.sqrt_price_next_x96) - 1
+                } else {
+                    get_tick_at_sqrt_ratio(step.sqrt_price_next_x96)
+                };
+                
+                // 틱 통과 시 유동성 업데이트
+                if (smart_table::contains(&pool.ticks, next_tick)) {
+                    let tick_info = smart_table::borrow(&pool.ticks, next_tick);
+                    let liquidity_net = if (zero_for_one) {
+                        -tick_info.liquidity_net
+                    } else {
+                        tick_info.liquidity_net
+                    };
+                    
+                    state.liquidity = add_delta(state.liquidity, liquidity_net);
+                };
+                
+                state.tick = next_tick;
+            } else {
+                state.tick = get_tick_at_sqrt_ratio(state.sqrt_price_x96);
+            }
+        };
+        
+        // 풀 상태 업데이트
+        pool.sqrt_price = state.sqrt_price_x96;
+        pool.tick = state.tick;
+        if (state.liquidity != pool.liquidity) {
+            pool.liquidity = state.liquidity;
+        };
+        
+        // 수수료 누적 업데이트
+        if (zero_for_one) {
+            pool.fee_growth_global_1 = state.fee_growth_global_x128;
+        } else {
+            pool.fee_growth_global_0 = state.fee_growth_global_x128;
+        };
+        
+        // 토큰 전송
+        let (amount_0, amount_1) = if (zero_for_one) {
+            (amount_specified - state.amount_specified_remaining, -state.amount_calculated)
+        } else {
+            (-state.amount_calculated, amount_specified - state.amount_specified_remaining)
+        };
+        
+        if (amount_0 > 0) {
+            let fa_0 = primary_fungible_store::withdraw(trader, pool_key.token_a, (amount_0 as u64));
+            primary_fungible_store::deposit(platform_addr, fa_0);
+        } else if (amount_0 < 0) {
+            let fa_0 = primary_fungible_store::withdraw(
+                &account::create_signer(platform_addr), 
+                pool_key.token_a, 
+                ((-amount_0) as u64)
+            );
+            primary_fungible_store::deposit(trader_addr, fa_0);
+        };
+        
+        if (amount_1 > 0) {
+            let fa_1 = primary_fungible_store::withdraw(trader, pool_key.token_b, (amount_1 as u64));
+            primary_fungible_store::deposit(platform_addr, fa_1);
+        } else if (amount_1 < 0) {
+            let fa_1 = primary_fungible_store::withdraw(
+                &account::create_signer(platform_addr), 
+                pool_key.token_b, 
+                ((-amount_1) as u64)
+            );
+            primary_fungible_store::deposit(trader_addr, fa_1);
+        };
+        
+        SwapResult {
+            amount_in: if (amount_0 > 0) { (amount_0 as u64) } else { (amount_1 as u64) },
+            amount_out: if (amount_0 < 0) { ((-amount_0) as u64) } else { ((-amount_1) as u64) },
+            sqrt_price_x96_after: state.sqrt_price_x96,
+            liquidity_after: state.liquidity,
+            tick_after: state.tick
+        }
+    }
+    
+    // 수학 헬퍼 함수들
+    
+    /// 스왑 상태 구조체
+    struct SwapState has drop {
+        amount_specified_remaining: i64,
+        amount_calculated: i64,
+        sqrt_price_x96: u128,
+        tick: i32,
+        fee_growth_global_x128: u256,
+        protocol_fee: u64,
+        liquidity: u128
+    }
+    
+    /// 스왑 스텝 구조체
+    struct SwapStepComputations has drop {
+        sqrt_price_start_x96: u128,
+        tick_next: i32,
+        initialized: bool,
+        sqrt_price_next_x96: u128,
+        amount_in: i64,
+        amount_out: i64,
+        fee_amount: u64
+    }
+    
+    fun compute_swap_step(
+        sqrt_ratio_current_x96: u128,
+        sqrt_ratio_target_x96: u128,
+        liquidity: u128,
+        amount_remaining: i64,
+        fee_pips: u64
+    ): SwapStepComputations {
+        let zero_for_one = sqrt_ratio_current_x96 >= sqrt_ratio_target_x96;
+        let exact_in = amount_remaining >= 0;
+        
+        let sqrt_ratio_next_x96 = if (exact_in) {
+            get_next_sqrt_price_from_input(
+                sqrt_ratio_current_x96,
+                liquidity,
+                amount_remaining,
+                zero_for_one
+            )
+        } else {
+            get_next_sqrt_price_from_output(
+                sqrt_ratio_current_x96,
+                liquidity,
+                -amount_remaining,
+                zero_for_one
+            )
+        };
+        
+        let max = sqrt_ratio_target_x96 == sqrt_ratio_next_x96;
+        
+        let (amount_in, amount_out) = if (zero_for_one) {
+            if (exact_in && !max) {
+                (amount_remaining, get_amount_1_delta(sqrt_ratio_next_x96, sqrt_ratio_current_x96, liquidity, false))
+            } else {
+                let amount_out_calc = get_amount_1_delta(sqrt_ratio_target_x96, sqrt_ratio_current_x96, liquidity, false);
+                (get_amount_0_delta(sqrt_ratio_current_x96, sqrt_ratio_target_x96, liquidity, true), amount_out_calc)
+            }
+        } else {
+            if (exact_in && !max) {
+                (amount_remaining, get_amount_0_delta(sqrt_ratio_current_x96, sqrt_ratio_next_x96, liquidity, false))
+            } else {
+                let amount_out_calc = get_amount_0_delta(sqrt_ratio_current_x96, sqrt_ratio_target_x96, liquidity, false);
+                (get_amount_1_delta(sqrt_ratio_target_x96, sqrt_ratio_current_x96, liquidity, true), amount_out_calc)
+            }
+        };
+        
+        let fee_amount = if (exact_in) {
+            (amount_in * (fee_pips as i64)) / 1000000
+        } else {
+            (amount_out * (fee_pips as i64)) / 1000000
+        };
+        
+        SwapStepComputations {
+            sqrt_price_start_x96: sqrt_ratio_current_x96,
+            tick_next: 0, // 계산 필요
+            initialized: true,
+            sqrt_price_next_x96: if (max) { sqrt_ratio_target_x96 } else { sqrt_ratio_next_x96 },
+            amount_in,
+            amount_out,
+            fee_amount: (fee_amount as u64)
+        }
+    }
+    
+    // 더 많은 수학 함수들...
+    fun get_sqrt_ratio_at_tick(tick: i32): u128 {
+        // Uniswap V3의 틱-가격 변환 수학
+        // 복잡한 고정소수점 연산
+        79228162514264337593543950336u128 // placeholder (실제로는 복잡한 계산)
+    }
+    
+    fun get_tick_at_sqrt_ratio(sqrt_price_x96: u128): i32 {
+        // 가격-틱 변환 (역함수)
+        0 // placeholder
+    }
+    
+    fun get_amount_0_delta(
+        sqrt_ratio_a_x96: u128,
+        sqrt_ratio_b_x96: u128,
+        liquidity: u128,
+        round_up: bool
+    ): i64 {
+        // 토큰0 수량 계산
+        0 // placeholder
+    }
+    
+    fun get_amount_1_delta(
+        sqrt_ratio_a_x96: u128,
+        sqrt_ratio_b_x96: u128,
+        liquidity: u128,
+        round_up: bool
+    ): i64 {
+        // 토큰1 수량 계산
+        0 // placeholder
+    }
+    
+    fun add_delta(x: u128, y: i128): u128 {
+        if (y < 0) {
+            x - ((-y) as u128)
+        } else {
+            x + (y as u128)
+        }
+    }
+}
+```
+
+## 🤖 고급 라우팅 알고리즘
+
+> *Intelligent routing system with MEV protection - Made by bookiroad*
+
+### 멀티홉 라우팅 시스템
+```move
+module routing::advanced_router {
+    use std::vector;
+    use std::option::{Self, Option};
+    use aptos_std::smart_table::{Self, SmartTable};
+    use aptos_framework::object::Object;
+    use aptos_framework::fungible_asset::Metadata;
+    
+    /// 라우팅 경로
+    struct RoutingPath has store, drop, copy {
+        pools: vector<PoolHop>,
+        expected_output: u64,
+        estimated_gas: u64,
+        price_impact: u64,        // basis points
+        total_fee: u64            // basis points
+    }
+    
+    /// 풀 홉
+    struct PoolHop has store, drop, copy {
+        pool_address: address,
+        token_in: Object<Metadata>,
+        token_out: Object<Metadata>,
+        pool_type: u8,            // 0: constant_product, 1: stable_swap, 2: concentrated
+        fee_tier: u64,
+        estimated_output: u64
+    }
+    
+    /// 최적 라우팅 경로 찾기
+    public fun find_optimal_route(
+        router_addr: address,
+        token_in: Object<Metadata>,
+        token_out: Object<Metadata>,
+        amount_in: u64,
+        max_hops: u8
+    ): Option<RoutingPath> {
+        // BFS로 모든 가능한 경로 탐색
+        let all_paths = find_all_paths(token_in, token_out, max_hops);
+        
+        if (vector::is_empty(&all_paths)) {
+            return option::none()
+        };
+        
+        // 각 경로의 예상 출력량과 비용 계산
+        let mut best_path = option::none<RoutingPath>();
+        let mut best_net_output = 0u64;
+        
+        let i = 0;
+        while (i < vector::length(&all_paths)) {
+            let path = vector::borrow(&all_paths, i);
+            
+            // 경로 시뮬레이션
+            let simulation_result = simulate_route(path, amount_in);
+            
+            if (option::is_some(&simulation_result)) {
+                let route = *option::borrow(&simulation_result);
+                
+                // 가스비 고려한 순수익 계산
+                let gas_cost_in_tokens = estimate_gas_cost_in_tokens(&route, token_out);
+                
+                let net_output = if (route.expected_output > gas_cost_in_tokens) {
+                    route.expected_output - gas_cost_in_tokens
+                } else {
+                    0
+                };
+                
+                // 가격 영향도 확인
+                if (route.price_impact <= 1000 && net_output > best_net_output) { // 10% 이하
+                    best_net_output = net_output;
+                    best_path = option::some(route);
+                }
+            };
+            
+            i = i + 1;
+        };
+        
+        best_path
+    }
+    
+    /// 경로 시뮬레이션
+    fun simulate_route(hops: &vector<PoolHop>, initial_amount: u64): Option<RoutingPath> {
+        let mut current_amount = initial_amount;
+        let mut total_fee = 0u64;
+        let mut total_gas = 0u64;
+        let mut max_price_impact = 0u64;
+        
+        let path_length = vector::length(hops);
+        let i = 0;
+        
+        while (i < path_length) {
+            let hop = vector::borrow(hops, i);
+            
+            // 각 풀에서의 스왑 시뮬레이션
+            let swap_result = simulate_pool_swap(hop, current_amount);
+            
+            if (option::is_none(&swap_result)) {
+                return option::none()
+            };
+            
+            let (output_amount, fee, gas_cost, price_impact) = *option::borrow(&swap_result);
+            
+            current_amount = output_amount;
+            total_fee = total_fee + fee;
+            total_gas = total_gas + gas_cost;
+            
+            if (price_impact > max_price_impact) {
+                max_price_impact = price_impact;
+            };
+            
+            i = i + 1;
+        };
+        
+        option::some(RoutingPath {
+            pools: *hops,
+            expected_output: current_amount,
+            estimated_gas: total_gas,
+            price_impact: max_price_impact,
+            total_fee
+        })
+    }
+    
+    /// MEV 공격 탐지
+    fun detect_sandwich_attack(trader: address, path: &vector<PoolHop>, amount: u64): bool {
+        // 간단한 휴리스틱: 대량 거래이거나 동일한 경로로 빠른 연속 거래
+        // 실제로는 더 정교한 탐지 알고리즘 필요
+        
+        // 1. 거래량 기반 탐지
+        if (amount > 100000000) { // 매우 큰 거래
+            return true
+        };
+        
+        // 2. 빈도 기반 탐지 (동일 사용자의 연속 거래)
+        let recent_trades = get_recent_trades(trader, path);
+        if (vector::length(&recent_trades) > 2) { // 짧은 시간 내 3회 이상
+            return true
+        };
+        
+        // 3. 가격 충격 예측
+        let estimated_impact = calculate_estimated_price_impact(path, amount);
+        if (estimated_impact > 500) { // 5% 이상 가격 충격
+            return true
+        };
+        
+        false
+    }
+    
+    // 헬퍼 함수들
+    fun find_all_paths(
+        token_in: Object<Metadata>,
+        token_out: Object<Metadata>,
+        max_hops: u8
+    ): vector<vector<PoolHop>> {
+        let mut all_paths = vector::empty<vector<PoolHop>>();
+        // BFS 구현 (간단화)
+        all_paths
+    }
+    
+    fun simulate_pool_swap(hop: &PoolHop, amount_in: u64): Option<(u64, u64, u64, u64)> {
+        // 풀 타입별 스왑 시뮬레이션
+        match (hop.pool_type) {
+            0 => simulate_constant_product_swap(hop, amount_in),
+            1 => simulate_stable_swap(hop, amount_in),
+            2 => simulate_concentrated_liquidity_swap(hop, amount_in),
+            _ => option::none()
+        }
+    }
+    
+    fun simulate_constant_product_swap(hop: &PoolHop, amount_in: u64): Option<(u64, u64, u64, u64)> {
+        // Constant product 공식으로 시뮬레이션
+        let (reserve_in, reserve_out) = get_pool_reserves(hop.pool_address);
+        
+        if (reserve_in == 0 || reserve_out == 0) {
+            return option::none()
+        };
+        
+        let amount_in_with_fee = amount_in * (10000 - hop.fee_tier);
+        let numerator = amount_in_with_fee * reserve_out;
+        let denominator = reserve_in * 10000 + amount_in_with_fee;
+        let amount_out = numerator / denominator;
+        
+        let fee = (amount_in * hop.fee_tier) / 10000;
+        let gas_cost = 50000; // 기본 가스 비용
+        let price_impact = calculate_price_impact(reserve_in, reserve_out, amount_in, amount_out);
+        
+        option::some((amount_out, fee, gas_cost, price_impact))
+    }
+    
+    fun get_pool_reserves(pool_addr: address): (u64, u64) {
+        // 실제 풀에서 리저브 조회
+        (1000000, 1000000) // placeholder
+    }
+    
+    fun calculate_price_impact(
+        reserve_in: u64,
+        reserve_out: u64,
+        amount_in: u64,
+        amount_out: u64
+    ): u64 {
+        let price_before = (reserve_out * 10000) / reserve_in;
+        let price_after = ((reserve_out - amount_out) * 10000) / (reserve_in + amount_in);
+        
+        if (price_after < price_before) {
+            ((price_before - price_after) * 10000) / price_before
+        } else {
+            0
+        }
+    }
+    
+    fun get_recent_trades(trader: address, path: &vector<PoolHop>): vector<u64> {
+        // 최근 거래 기록 조회
+        vector::empty<u64>() // placeholder
+    }
+    
+    fun calculate_estimated_price_impact(path: &vector<PoolHop>, amount: u64): u64 {
+        // 경로 전체의 예상 가격 충격 계산
+        0 // placeholder
+    }
+    
+    fun estimate_gas_cost_in_tokens(route: &RoutingPath, output_token: Object<Metadata>): u64 {
+        // 가스 비용을 출력 토큰 단위로 환산
+        route.estimated_gas / 1000 // 간단한 환산
+    }
+}
+```
+
+## 🛡️ MEV 보호 및 보안 시스템
+
+### 종합적인 MEV 보호
+```move
+module mev_protection::comprehensive_shield {
+    use std::signer;
+    use std::vector;
+    use aptos_framework::timestamp;
+    use aptos_std::smart_table::{Self, SmartTable};
+    
+    /// MEV 보호 시스템
+    struct MEVShield has key {
+        // 커밋-리빌 스키마
+        pending_commits: SmartTable<address, vector<CommitData>>,
+        
+        // 배치 처리
+        batch_queue: vector<BatchedTransaction>,
+        batch_interval: u64,          // 배치 간격 (초)
+        last_batch_time: u64,
+        
+        // 가격 오라클
+        price_feeds: SmartTable<Object<Metadata>, PriceFeed>,
+        
+        // 임계값 설정
+        max_slippage_tolerance: u64,  // basis points
+        large_trade_threshold: u64,   // 대량 거래 임계값
+        
+        // 통계
+        mev_attacks_prevented: u64,
+        total_protected_volume: u64,
+        
+        is_active: bool
+    }
+    
+    /// 커밋 데이터
+    struct CommitData has store, drop, copy {
+        commit_hash: vector<u8>,
+        timestamp: u64,
+        execution_time: u64,
+        trade_data_hash: vector<u8>
+    }
+    
+    /// 배치 거래
+    struct BatchedTransaction has store, drop, copy {
+        trader: address,
+        trade_type: u8,              // 0: swap, 1: add_liquidity, 2: remove_liquidity
+        params: vector<u8>,          // 인코딩된 거래 파라미터
+        priority_fee: u64,
+        submitted_at: u64
+    }
+    
+    /// 가격 피드
+    struct PriceFeed has store, drop, copy {
+        token: Object<Metadata>,
+        price: u64,                  // 8 decimals
+        last_updated: u64,
+        source: String,              // "chainlink", "pyth", "twap"
+        confidence: u64              // basis points
+    }
+    
+    /// MEV 보호 시스템 초기화
+    public fun initialize_mev_shield(admin: &signer) {
+        let shield = MEVShield {
+            pending_commits: smart_table::new(),
+            batch_queue: vector::empty(),
+            batch_interval: 30,      // 30초 배치
+            last_batch_time: timestamp::now_seconds(),
+            price_feeds: smart_table::new(),
+            max_slippage_tolerance: 500, // 5%
+            large_trade_threshold: 100000, // 100k USD
+            mev_attacks_prevented: 0,
+            total_protected_volume: 0,
+            is_active: true
+        };
+        
+        move_to(admin, shield);
+    }
+    
+    /// 커밋-리빌 거래 커밋
+    public fun commit_trade(
+        trader: &signer,
+        shield_addr: address,
+        commit_hash: vector<u8>,
+        execution_delay: u64
+    ) acquires MEVShield {
+        let trader_addr = signer::address_of(trader);
+        let shield = borrow_global_mut<MEVShield>(shield_addr);
+        
+        assert!(shield.is_active, E_SHIELD_INACTIVE);
+        
+        let current_time = timestamp::now_seconds();
+        let commit_data = CommitData {
+            commit_hash,
+            timestamp: current_time,
+            execution_time: current_time + execution_delay,
+            trade_data_hash: hash::sha3_256(commit_hash)
+        };
+        
+        if (smart_table::contains(&shield.pending_commits, trader_addr)) {
+            let commits = smart_table::borrow_mut(&mut shield.pending_commits, trader_addr);
+            vector::push_back(commits, commit_data);
+        } else {
+            smart_table::add(&mut shield.pending_commits, trader_addr, vector::singleton(commit_data));
+        }
+    }
+    
+    /// 거래 실행 (리빌)
+    public fun reveal_and_execute(
+        trader: &signer,
+        shield_addr: address,
+        nonce: vector<u8>,
+        trade_params: vector<u8>
+    ) acquires MEVShield {
+        let trader_addr = signer::address_of(trader);
+        let shield = borrow_global_mut<MEVShield>(shield_addr);
+        
+        // 커밋 검증
+        assert!(smart_table::contains(&shield.pending_commits, trader_addr), E_NO_COMMIT_FOUND);
+        let commits = smart_table::borrow(&shield.pending_commits, trader_addr);
+        
+        let commit_verified = verify_commit(commits, &nonce, &trade_params);
+        assert!(commit_verified, E_INVALID_COMMIT);
+        
+        // 시간 확인
+        let current_time = timestamp::now_seconds();
+        let commit_data = find_valid_commit(commits, current_time);
+        assert!(option::is_some(&commit_data), E_COMMIT_EXPIRED);
+        
+        // MEV 공격 탐지
+        let mev_detected = detect_potential_mev(&trade_params, current_time);
+        if (mev_detected) {
+            shield.mev_attacks_prevented = shield.mev_attacks_prevented + 1;
+            abort E_MEV_ATTACK_DETECTED
+        };
+        
+        // 거래 실행
+        execute_protected_trade(trader, &trade_params, shield);
+        
+        // 커밋 제거
+        remove_used_commit(shield, trader_addr, current_time);
+    }
+    
+    /// 배치 거래 제출
+    public fun submit_to_batch(
+        trader: &signer,
+        shield_addr: address,
+        trade_type: u8,
+        params: vector<u8>,
+        priority_fee: u64
+    ) acquires MEVShield {
+        let trader_addr = signer::address_of(trader);
+        let shield = borrow_global_mut<MEVShield>(shield_addr);
+        
+        let batched_tx = BatchedTransaction {
+            trader: trader_addr,
+            trade_type,
+            params,
+            priority_fee,
+            submitted_at: timestamp::now_seconds()
+        };
+        
+        vector::push_back(&mut shield.batch_queue, batched_tx);
+        
+        // 배치 크기나 시간 조건 확인하여 즉시 실행
+        if (should_execute_batch(shield)) {
+            execute_batch(shield);
+        }
+    }
+    
+    /// 배치 실행
+    fun execute_batch(shield: &mut MEVShield) {
+        if (vector::is_empty(&shield.batch_queue)) {
+            return
+        };
+        
+        // 우선순위 수수료순으로 정렬
+        sort_batch_by_priority(&mut shield.batch_queue);
+        
+        // MEV 최적화된 순서로 재정렬
+        reorder_for_mev_protection(&mut shield.batch_queue);
+        
+        // 배치 실행
+        while (!vector::is_empty(&shield.batch_queue)) {
+            let tx = vector::pop_back(&mut shield.batch_queue);
+            execute_batched_transaction(&tx, shield);
+        };
+        
+        shield.last_batch_time = timestamp::now_seconds();
+    }
+    
+    // 헬퍼 함수들
+    
+    fun verify_commit(
+        commits: &vector<CommitData>,
+        nonce: &vector<u8>,
+        trade_params: &vector<u8>
+    ): bool {
+        let expected_hash = hash::sha3_256(*nonce);
+        vector::append(&mut expected_hash, *trade_params);
+        let computed_hash = hash::sha3_256(expected_hash);
+        
+        let i = 0;
+        while (i < vector::length(commits)) {
+            let commit = vector::borrow(commits, i);
+            if (commit.commit_hash == computed_hash) {
+                return true
+            };
+            i = i + 1;
+        };
+        false
+    }
+    
+    fun find_valid_commit(commits: &vector<CommitData>, current_time: u64): Option<CommitData> {
+        let i = 0;
+        while (i < vector::length(commits)) {
+            let commit = vector::borrow(commits, i);
+            if (commit.execution_time <= current_time && 
+                current_time <= commit.execution_time + 300) { // 5분 윈도우
+                return option::some(*commit)
+            };
+            i = i + 1;
+        };
+        option::none()
+    }
+    
+    fun detect_potential_mev(trade_params: &vector<u8>, timestamp: u64): bool {
+        // 복잡한 MEV 탐지 로직
+        // 1. 샌드위치 공격 패턴 탐지
+        // 2. 프론트러닝 탐지  
+        // 3. 백러닝 탐지
+        // 간단한 예시만 구현
+        false
+    }
+    
+    fun execute_protected_trade(
+        trader: &signer,
+        trade_params: &vector<u8>,
+        shield: &mut MEVShield
+    ) {
+        // 실제 거래 실행 로직
+        // DEX 모듈과 연동
+        shield.total_protected_volume = shield.total_protected_volume + 1000; // placeholder
+    }
+    
+    fun should_execute_batch(shield: &MEVShield): bool {
+        let current_time = timestamp::now_seconds();
+        current_time >= shield.last_batch_time + shield.batch_interval ||
+        vector::length(&shield.batch_queue) >= 100 // 최대 배치 크기
+    }
+    
+    fun sort_batch_by_priority(batch: &mut vector<BatchedTransaction>) {
+        // 우선순위 수수료 기준 정렬 (간단화)
+        // 실제로는 더 복잡한 정렬 알고리즘 필요
+    }
+    
+    fun reorder_for_mev_protection(batch: &mut vector<BatchedTransaction>) {
+        // MEV 보호를 위한 거래 순서 최적화
+        // 예: 큰 거래들을 분산, 상충되는 거래들 분리
+    }
+    
+    fun execute_batched_transaction(tx: &BatchedTransaction, shield: &mut MEVShield) {
+        // 배치된 거래 실행
+    }
+    
+    fun remove_used_commit(shield: &mut MEVShield, trader: address, timestamp: u64) {
+        // 사용된 커밋 제거
+    }
+}
+```
+
+## 🏛️ 거버넌스 및 수수료 분배
+
+### DAO 기반 DEX 거버넌스
+```move
+module dex_governance::dao_system {
+    use std::signer;
+    use std::string::{Self, String};
+    use std::vector;
+    use std::option::{Self, Option};
+    use aptos_framework::object::{Self, Object};
+    use aptos_framework::fungible_asset::{Self, Metadata};
+    use aptos_framework::timestamp;
+    use aptos_std::smart_table::{Self, SmartTable};
+    
+    /// DEX DAO 거버넌스
+    struct DEXGovernance has key {
+        // 거버넌스 토큰
+        governance_token: Object<Metadata>,
+        
+        // 제안 관리
+        proposals: SmartTable<u64, Proposal>,
+        next_proposal_id: u64,
+        
+        // 투표 설정
+        voting_delay: u64,           // 제안 후 투표 시작까지 대기 시간
+        voting_period: u64,          // 투표 기간
+        proposal_threshold: u64,     // 제안 생성 최소 토큰량
+        quorum_threshold: u64,       // 가결 최소 참여율 (basis points)
+        
+        // 실행 설정
+        timelock_delay: u64,         // 가결 후 실행까지 대기 시간
+        
+        // 수수료 분배
+        fee_distribution: FeeDistribution,
+        
+        // 스테이킹
+        staking_pools: SmartTable<StakingTier, StakingPool>,
+        
+        // 거버넌스 통계
+        total_proposals: u64,
+        successful_proposals: u64,
+        total_votes_cast: u64,
+        
+        created_at: u64
+    }
+    
+    /// 제안
+    struct Proposal has store, drop, copy {
+        id: u64,
+        proposer: address,
+        title: String,
+        description: String,
+        
+        // 제안 타입 및 실행 데이터
+        proposal_type: u8,           // 0: parameter, 1: upgrade, 2: treasury, 3: fee
+        execution_data: vector<u8>,
+        
+        // 투표 결과
+        for_votes: u64,
+        against_votes: u64,
+        abstain_votes: u64,
+        
+        // 시간 정보
+        created_at: u64,
+        voting_starts_at: u64,
+        voting_ends_at: u64,
+        execution_eta: Option<u64>,  // 실행 예정 시간
+        
+        // 상태
+        status: u8,                  // 0: pending, 1: active, 2: succeeded, 3: defeated, 4: executed, 5: cancelled
+        
+        // 투표자 기록
+        voters: SmartTable<address, VoteRecord>
+    }
+    
+    /// 투표 기록
+    struct VoteRecord has store, drop, copy {
+        voter: address,
+        support: u8,                 // 0: against, 1: for, 2: abstain
+        votes: u64,                  // 투표력
+        reason: String,
+        timestamp: u64
+    }
+    
+    /// 수수료 분배 설정
+    struct FeeDistribution has store, drop, copy {
+        // 분배 비율 (total = 10000 basis points)
+        liquidity_providers: u64,    // LP들에게
+        token_holders: u64,          // 토큰 홀더들에게  
+        treasury: u64,               // DAO 국고
+        development: u64,            // 개발 기금
+        marketing: u64,              // 마케팅 기금
+        
+        // 분배 주기
+        distribution_interval: u64,  // 초 단위
+        last_distribution: u64,
+        
+        // 누적 수수료
+        accumulated_fees: SmartTable<Object<Metadata>, u64>,
+        total_distributed: u64
+    }
+    
+    /// 스테이킹 티어
+    struct StakingTier has store, drop, copy {
+        tier_name: String,
+        min_stake_amount: u64,
+        lock_duration: u64,          // 잠금 기간 (초)
+        voting_multiplier: u64,      // 투표력 배수 (100 = 1x)
+        fee_share_bonus: u64         // 수수료 분배 보너스 (basis points)
+    }
+    
+    /// 스테이킹 풀
+    struct StakingPool has store, drop, copy {
+        tier: StakingTier,
+        total_staked: u64,
+        staker_count: u64,
+        stakers: SmartTable<address, StakeInfo>,
+        
+        // 보상 정보
+        reward_per_token_stored: u64,
+        last_update_time: u64,
+        reward_rate: u64,            // 초당 보상률
+        
+        created_at: u64
+    }
+    
+    /// 스테이킹 정보
+    struct StakeInfo has store, drop, copy {
+        staker: address,
+        amount: u64,
+        tier: StakingTier,
+        staked_at: u64,
+        unlock_time: u64,
+        
+        // 보상 정보
+        reward_per_token_paid: u64,
+        rewards_earned: u64,
+        
+        last_updated: u64
+    }
+    
+    /// 거버넌스 시스템 초기화
+    public fun initialize_governance(
+        admin: &signer,
+        governance_token: Object<Metadata>,
+        voting_delay: u64,
+        voting_period: u64,
+        proposal_threshold: u64,
+        quorum_threshold: u64
+    ) {
+        let admin_addr = signer::address_of(admin);
+        
+        // 기본 수수료 분배 설정
+        let fee_distribution = FeeDistribution {
+            liquidity_providers: 6000,  // 60%
+            token_holders: 2000,        // 20%
+            treasury: 1000,             // 10%
+            development: 700,           // 7%
+            marketing: 300,             // 3%
+            distribution_interval: 86400, // 24시간
+            last_distribution: timestamp::now_seconds(),
+            accumulated_fees: smart_table::new(),
+            total_distributed: 0
+        };
+        
+        // 스테이킹 티어 설정
+        let mut staking_pools = smart_table::new<StakingTier, StakingPool>();
+        
+        // Bronze 티어
+        let bronze_tier = StakingTier {
+            tier_name: string::utf8(b"Bronze"),
+            min_stake_amount: 1000,     // 1000 토큰
+            lock_duration: 2592000,     // 30일
+            voting_multiplier: 100,     // 1x
+            fee_share_bonus: 0          // 보너스 없음
+        };
+        
+        smart_table::add(&mut staking_pools, bronze_tier, StakingPool {
+            tier: bronze_tier,
+            total_staked: 0,
+            staker_count: 0,
+            stakers: smart_table::new(),
+            reward_per_token_stored: 0,
+            last_update_time: timestamp::now_seconds(),
+            reward_rate: 100,           // 초당 100 wei
+            created_at: timestamp::now_seconds()
+        });
+        
+        // Silver 티어
+        let silver_tier = StakingTier {
+            tier_name: string::utf8(b"Silver"),
+            min_stake_amount: 10000,    // 10000 토큰
+            lock_duration: 7776000,     // 90일
+            voting_multiplier: 150,     // 1.5x
+            fee_share_bonus: 50         // 0.5% 보너스
+        };
+        
+        smart_table::add(&mut staking_pools, silver_tier, StakingPool {
+            tier: silver_tier,
+            total_staked: 0,
+            staker_count: 0,
+            stakers: smart_table::new(),
+            reward_per_token_stored: 0,
+            last_update_time: timestamp::now_seconds(),
+            reward_rate: 200,
+            created_at: timestamp::now_seconds()
+        });
+        
+        // Gold 티어
+        let gold_tier = StakingTier {
+            tier_name: string::utf8(b"Gold"),
+            min_stake_amount: 100000,   // 100000 토큰
+            lock_duration: 15552000,    // 180일
+            voting_multiplier: 200,     // 2x
+            fee_share_bonus: 100        // 1% 보너스
+        };
+        
+        smart_table::add(&mut staking_pools, gold_tier, StakingPool {
+            tier: gold_tier,
+            total_staked: 0,
+            staker_count: 0,
+            stakers: smart_table::new(),
+            reward_per_token_stored: 0,
+            last_update_time: timestamp::now_seconds(),
+            reward_rate: 500,
+            created_at: timestamp::now_seconds()
+        });
+        
+        let governance = DEXGovernance {
+            governance_token,
+            proposals: smart_table::new(),
+            next_proposal_id: 1,
+            voting_delay,
+            voting_period,
+            proposal_threshold,
+            quorum_threshold,
+            timelock_delay: 172800,     // 48시간
+            fee_distribution,
+            staking_pools,
+            total_proposals: 0,
+            successful_proposals: 0,
+            total_votes_cast: 0,
+            created_at: timestamp::now_seconds()
+        };
+        
+        move_to(admin, governance);
+    }
+    
+    /// 제안 생성
+    public fun create_proposal(
+        proposer: &signer,
+        governance_addr: address,
+        title: String,
+        description: String,
+        proposal_type: u8,
+        execution_data: vector<u8>
+    ): u64 acquires DEXGovernance {
+        let proposer_addr = signer::address_of(proposer);
+        let governance = borrow_global_mut<DEXGovernance>(governance_addr);
+        
+        // 제안 권한 확인
+        let proposer_balance = get_voting_power(proposer_addr, governance);
+        assert!(proposer_balance >= governance.proposal_threshold, E_INSUFFICIENT_PROPOSAL_POWER);
+        
+        let proposal_id = governance.next_proposal_id;
+        let current_time = timestamp::now_seconds();
+        
+        let proposal = Proposal {
+            id: proposal_id,
+            proposer: proposer_addr,
+            title,
+            description,
+            proposal_type,
+            execution_data,
+            for_votes: 0,
+            against_votes: 0,
+            abstain_votes: 0,
+            created_at: current_time,
+            voting_starts_at: current_time + governance.voting_delay,
+            voting_ends_at: current_time + governance.voting_delay + governance.voting_period,
+            execution_eta: option::none(),
+            status: 0, // pending
+            voters: smart_table::new()
+        };
+        
+        smart_table::add(&mut governance.proposals, proposal_id, proposal);
+        
+        governance.next_proposal_id = proposal_id + 1;
+        governance.total_proposals = governance.total_proposals + 1;
+        
+        proposal_id
+    }
+    
+    /// 투표
+    public fun cast_vote(
+        voter: &signer,
+        governance_addr: address,
+        proposal_id: u64,
+        support: u8,         // 0: against, 1: for, 2: abstain
+        reason: String
+    ) acquires DEXGovernance {
+        let voter_addr = signer::address_of(voter);
+        let governance = borrow_global_mut<DEXGovernance>(governance_addr);
+        
+        // 제안 존재 확인
+        assert!(smart_table::contains(&governance.proposals, proposal_id), E_PROPOSAL_NOT_EXISTS);
+        let proposal = smart_table::borrow_mut(&mut governance.proposals, proposal_id);
+        
+        // 투표 가능 시간 확인
+        let current_time = timestamp::now_seconds();
+        assert!(current_time >= proposal.voting_starts_at, E_VOTING_NOT_STARTED);
+        assert!(current_time <= proposal.voting_ends_at, E_VOTING_ENDED);
+        assert!(proposal.status == 1, E_PROPOSAL_NOT_ACTIVE); // active
+        
+        // 중복 투표 확인
+        assert!(!smart_table::contains(&proposal.voters, voter_addr), E_ALREADY_VOTED);
+        
+        // 투표력 계산
+        let voting_power = get_voting_power(voter_addr, governance);
+        assert!(voting_power > 0, E_NO_VOTING_POWER);
+        
+        // 투표 기록
+        let vote_record = VoteRecord {
+            voter: voter_addr,
+            support,
+            votes: voting_power,
+            reason,
+            timestamp: current_time
+        };
+        
+        smart_table::add(&mut proposal.voters, voter_addr, vote_record);
+        
+        // 투표 집계
+        if (support == 0) {
+            proposal.against_votes = proposal.against_votes + voting_power;
+        } else if (support == 1) {
+            proposal.for_votes = proposal.for_votes + voting_power;
+        } else {
+            proposal.abstain_votes = proposal.abstain_votes + voting_power;
+        };
+        
+        governance.total_votes_cast = governance.total_votes_cast + 1;
+    }
+    
+    /// 제안 실행
+    public fun execute_proposal(
+        executor: &signer,
+        governance_addr: address,
+        proposal_id: u64
+    ) acquires DEXGovernance {
+        let governance = borrow_global_mut<DEXGovernance>(governance_addr);
+        
+        assert!(smart_table::contains(&governance.proposals, proposal_id), E_PROPOSAL_NOT_EXISTS);
+        let proposal = smart_table::borrow_mut(&mut governance.proposals, proposal_id);
+        
+        // 실행 조건 확인
+        assert!(proposal.status == 2, E_PROPOSAL_NOT_SUCCEEDED); // succeeded
+        
+        let current_time = timestamp::now_seconds();
+        if (option::is_some(&proposal.execution_eta)) {
+            let eta = *option::borrow(&proposal.execution_eta);
+            assert!(current_time >= eta, E_TIMELOCK_NOT_EXPIRED);
+        };
+        
+        // 제안 실행
+        execute_proposal_logic(governance, proposal);
+        
+        proposal.status = 4; // executed
+        governance.successful_proposals = governance.successful_proposals + 1;
+    }
+    
+    /// 스테이킹
+    public fun stake_tokens(
+        staker: &signer,
+        governance_addr: address,
+        tier: StakingTier,
+        amount: u64
+    ) acquires DEXGovernance {
+        let staker_addr = signer::address_of(staker);
+        let governance = borrow_global_mut<DEXGovernance>(governance_addr);
+        
+        // 티어 확인
+        assert!(smart_table::contains(&governance.staking_pools, tier), E_INVALID_STAKING_TIER);
+        let pool = smart_table::borrow_mut(&mut governance.staking_pools, tier);
+        
+        // 최소 스테이킹 금액 확인
+        assert!(amount >= tier.min_stake_amount, E_INSUFFICIENT_STAKE_AMOUNT);
+        
+        // 토큰 전송
+        let staking_fa = primary_fungible_store::withdraw(staker, governance.governance_token, amount);
+        primary_fungible_store::deposit(governance_addr, staking_fa);
+        
+        let current_time = timestamp::now_seconds();
+        let stake_info = StakeInfo {
+            staker: staker_addr,
+            amount,
+            tier,
+            staked_at: current_time,
+            unlock_time: current_time + tier.lock_duration,
+            reward_per_token_paid: pool.reward_per_token_stored,
+            rewards_earned: 0,
+            last_updated: current_time
+        };
+        
+        // 기존 스테이킹이 있으면 누적
+        if (smart_table::contains(&pool.stakers, staker_addr)) {
+            let existing_stake = smart_table::borrow_mut(&mut pool.stakers, staker_addr);
+            existing_stake.amount = existing_stake.amount + amount;
+            existing_stake.last_updated = current_time;
+        } else {
+            smart_table::add(&mut pool.stakers, staker_addr, stake_info);
+            pool.staker_count = pool.staker_count + 1;
+        };
+        
+        pool.total_staked = pool.total_staked + amount;
+    }
+    
+    /// 수수료 분배
+    public fun distribute_fees(
+        distributor: &signer,
+        governance_addr: address
+    ) acquires DEXGovernance {
+        let governance = borrow_global_mut<DEXGovernance>(governance_addr);
+        
+        let current_time = timestamp::now_seconds();
+        assert!(current_time >= governance.fee_distribution.last_distribution + 
+                governance.fee_distribution.distribution_interval, E_DISTRIBUTION_TOO_EARLY);
+        
+        // 각 토큰별 누적 수수료 분배
+        let token_keys = smart_table::keys(&governance.fee_distribution.accumulated_fees);
+        let i = 0;
+        
+        while (i < vector::length(&token_keys)) {
+            let token = *vector::borrow(&token_keys, i);
+            let accumulated = *smart_table::borrow(&governance.fee_distribution.accumulated_fees, token);
+            
+            if (accumulated > 0) {
+                distribute_token_fees(governance, token, accumulated);
+                
+                // 분배 완료 후 누적량 초기화
+                let accumulated_ref = smart_table::borrow_mut(&mut governance.fee_distribution.accumulated_fees, token);
+                *accumulated_ref = 0;
+            };
+            
+            i = i + 1;
+        };
+        
+        governance.fee_distribution.last_distribution = current_time;
+    }
+    
+    // 헬퍼 함수들
+    
+    fun get_voting_power(voter: address, governance: &DEXGovernance): u64 {
+        let base_balance = primary_fungible_store::balance(voter, governance.governance_token);
+        
+        // 스테이킹 보너스 계산
+        let mut total_voting_power = base_balance;
+        
+        let tier_keys = smart_table::keys(&governance.staking_pools);
+        let i = 0;
+        
+        while (i < vector::length(&tier_keys)) {
+            let tier = *vector::borrow(&tier_keys, i);
+            let pool = smart_table::borrow(&governance.staking_pools, tier);
+            
+            if (smart_table::contains(&pool.stakers, voter)) {
+                let stake_info = smart_table::borrow(&pool.stakers, voter);
+                let bonus_power = (stake_info.amount * tier.voting_multiplier) / 100;
+                total_voting_power = total_voting_power + bonus_power;
+            };
+            
+            i = i + 1;
+        };
+        
+        total_voting_power
+    }
+    
+    fun execute_proposal_logic(governance: &mut DEXGovernance, proposal: &Proposal) {
+        // 제안 타입별 실행 로직
+        if (proposal.proposal_type == 0) {
+            // 파라미터 변경
+            execute_parameter_change(governance, &proposal.execution_data);
+        } else if (proposal.proposal_type == 1) {
+            // 업그레이드
+            execute_upgrade(governance, &proposal.execution_data);
+        } else if (proposal.proposal_type == 2) {
+            // 국고 관련
+            execute_treasury_action(governance, &proposal.execution_data);
+        } else if (proposal.proposal_type == 3) {
+            // 수수료 변경
+            execute_fee_change(governance, &proposal.execution_data);
+        }
+    }
+    
+    fun execute_parameter_change(governance: &mut DEXGovernance, data: &vector<u8>) {
+        // 파라미터 변경 로직
+    }
+    
+    fun execute_upgrade(governance: &mut DEXGovernance, data: &vector<u8>) {
+        // 컨트랙트 업그레이드 로직
+    }
+    
+    fun execute_treasury_action(governance: &mut DEXGovernance, data: &vector<u8>) {
+        // 국고 관련 액션
+    }
+    
+    fun execute_fee_change(governance: &mut DEXGovernance, data: &vector<u8>) {
+        // 수수료 구조 변경
+    }
+    
+    fun distribute_token_fees(
+        governance: &mut DEXGovernance,
+        token: Object<Metadata>,
+        total_amount: u64
+    ) {
+        let distribution = &governance.fee_distribution;
+        
+        // LP들에게 분배
+        let lp_amount = (total_amount * distribution.liquidity_providers) / 10000;
+        if (lp_amount > 0) {
+            distribute_to_liquidity_providers(token, lp_amount);
+        };
+        
+        // 토큰 홀더들에게 분배
+        let holder_amount = (total_amount * distribution.token_holders) / 10000;
+        if (holder_amount > 0) {
+            distribute_to_token_holders(governance, token, holder_amount);
+        };
+        
+        // 국고로 분배
+        let treasury_amount = (total_amount * distribution.treasury) / 10000;
+        if (treasury_amount > 0) {
+            transfer_to_treasury(token, treasury_amount);
+        };
+        
+        // 개발 기금
+        let dev_amount = (total_amount * distribution.development) / 10000;
+        if (dev_amount > 0) {
+            transfer_to_development_fund(token, dev_amount);
+        };
+        
+        // 마케팅 기금
+        let marketing_amount = (total_amount * distribution.marketing) / 10000;
+        if (marketing_amount > 0) {
+            transfer_to_marketing_fund(token, marketing_amount);
+        }
+    }
+    
+    fun distribute_to_liquidity_providers(token: Object<Metadata>, amount: u64) {
+        // LP 토큰 홀더들에게 pro-rata 분배
+    }
+    
+    fun distribute_to_token_holders(
+        governance: &DEXGovernance,
+        token: Object<Metadata>,
+        amount: u64
+    ) {
+        // 거버넌스 토큰 홀더들에게 분배 (스테이킹 보너스 포함)
+    }
+    
+    fun transfer_to_treasury(token: Object<Metadata>, amount: u64) {
+        // DAO 국고로 이전
+    }
+    
+    fun transfer_to_development_fund(token: Object<Metadata>, amount: u64) {
+        // 개발 기금으로 이전
+    }
+    
+    fun transfer_to_marketing_fund(token: Object<Metadata>, amount: u64) {
+        // 마케팅 기금으로 이전
+    }
+    
+    // 에러 코드
+    const E_INSUFFICIENT_PROPOSAL_POWER: u64 = 1;
+    const E_PROPOSAL_NOT_EXISTS: u64 = 2;
+    const E_VOTING_NOT_STARTED: u64 = 3;
+    const E_VOTING_ENDED: u64 = 4;
+    const E_PROPOSAL_NOT_ACTIVE: u64 = 5;
+    const E_ALREADY_VOTED: u64 = 6;
+    const E_NO_VOTING_POWER: u64 = 7;
+    const E_PROPOSAL_NOT_SUCCEEDED: u64 = 8;
+    const E_TIMELOCK_NOT_EXPIRED: u64 = 9;
+    const E_INVALID_STAKING_TIER: u64 = 10;
+    const E_INSUFFICIENT_STAKE_AMOUNT: u64 = 11;
+    const E_DISTRIBUTION_TOO_EARLY: u64 = 12;
+}
+```
+
+## 🔗 TypeScript SDK 통합
+
+### 종합 DEX 관리 클래스
+```typescript
+import {
+  MovementClient,
+  MovementAccount,
+  Network
+} from "@movementnetwork/ts-sdk";
+
+interface PoolConfig {
+  tokenA: string;
+  tokenB: string;
+  feeRate: number;
+  ammType: 'constant_product' | 'stable_swap' | 'concentrated';
+  initialAmountA: number;
+  initialAmountB: number;
+}
+
+interface SwapParams {
+  path: string[];
+  amountIn: number;
+  amountOutMin: number;
+  slippageTolerance: number;
+}
+
+interface LiquidityParams {
+  poolKey: string;
+  amountADesired: number;
+  amountBDesired: number;
+  amountAMin: number;
+  amountBMin: number;
+}
+
+class ComprehensiveDEXManager {
+  private client: MovementClient;
+  private moduleAddress: string;
+  
+  constructor(client: MovementClient, moduleAddress: string) {
+    this.client = client;
+    this.moduleAddress = moduleAddress;
+  }
+  
+  // 풀 생성
+  async createPool(
+    creator: MovementAccount,
+    platformAddress: string,
+    config: PoolConfig
+  ): Promise<{
+    success: boolean;
+    transactionHash: string;
+    poolKey?: string;
+  }> {
+    try {
+      const payload = {
+        type: "entry_function_payload",
+        function: `${this.moduleAddress}::comprehensive_dex::create_constant_product_pool`,
+        type_arguments: [],
+        arguments: [
+          platformAddress,
+          config.tokenA,
+          config.tokenB,
+          config.feeRate.toString(),
+          config.initialAmountA.toString(),
+          config.initialAmountB.toString()
+        ]
+      };
+      
+      const txn = await this.client.generateTransaction(creator.address(), payload);
+      const signedTxn = await this.client.signTransaction(creator, txn);
+      const response = await this.client.submitTransaction(signedTxn);
+      
+      await this.client.waitForTransaction(response.hash);
+      
+      return {
+        success: true,
+        transactionHash: response.hash,
+        poolKey: await this.extractPoolKey(response.hash)
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        transactionHash: error.hash || ""
+      };
+    }
+  }
+  
+  // 스마트 라우팅 스왑
+  async smartSwap(
+    trader: MovementAccount,
+    platformAddress: string,
+    params: SwapParams
+  ): Promise<{
+    success: boolean;
+    transactionHash: string;
+    amountOut?: number;
+    priceImpact?: number;
+  }> {
+    try {
+      // 최적 경로 찾기
+      const optimalRoute = await this.findOptimalRoute(
+        params.path[0],
+        params.path[params.path.length - 1],
+        params.amountIn
+      );
+      
+      if (!optimalRoute) {
+        throw new Error("No viable route found");
+      }
+      
+      // MEV 보호 확인
+      if (await this.detectMEVRisk(trader.address(), optimalRoute)) {
+        // 커밋-리빌 또는 배치 처리 사용
+        return await this.executeProtectedSwap(trader, platformAddress, optimalRoute);
+      }
+      
+      const payload = {
+        type: "entry_function_payload",
+        function: `${this.moduleAddress}::comprehensive_dex::swap_exact_input`,
+        type_arguments: [],
+        arguments: [
+          platformAddress,
+          optimalRoute.pools,
+          params.amountIn.toString(),
+          params.amountOutMin.toString()
+        ]
+      };
+      
+      const txn = await this.client.generateTransaction(trader.address(), payload);
+      const signedTxn = await this.client.signTransaction(trader, txn);
+      const response = await this.client.submitTransaction(signedTxn);
+      
+      await this.client.waitForTransaction(response.hash);
+      
+      const amountOut = await this.extractSwapOutput(response.hash);
+      const priceImpact = this.calculatePriceImpact(params.amountIn, amountOut, optimalRoute);
+      
+      return {
+        success: true,
+        transactionHash: response.hash,
+        amountOut,
+        priceImpact
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        transactionHash: error.hash || ""
+      };
+    }
+  }
+  
+  // 집중 유동성 포지션 생성
+  async createConcentratedPosition(
+    provider: MovementAccount,
+    platformAddress: string,
+    poolKey: string,
+    tickLower: number,
+    tickUpper: number,
+    amount0Desired: number,
+    amount1Desired: number,
+    amount0Min: number,
+    amount1Min: number
+  ): Promise<{
+    success: boolean;
+    transactionHash: string;
+    positionKey?: string;
+    liquidity?: number;
+  }> {
+    try {
+      const payload = {
+        type: "entry_function_payload",
+        function: `${this.moduleAddress}::concentrated_liquidity::mint_position`,
+        type_arguments: [],
+        arguments: [
+          platformAddress,
+          poolKey,
+          tickLower.toString(),
+          tickUpper.toString(),
+          amount0Desired.toString(),
+          amount1Desired.toString(),
+          amount0Min.toString(),
+          amount1Min.toString()
+        ]
+      };
+      
+      const txn = await this.client.generateTransaction(provider.address(), payload);
+      const signedTxn = await this.client.signTransaction(provider, txn);
+      const response = await this.client.submitTransaction(signedTxn);
+      
+      await this.client.waitForTransaction(response.hash);
+      
+      const positionData = await this.extractPositionData(response.hash);
+      
+      return {
+        success: true,
+        transactionHash: response.hash,
+        positionKey: positionData.key,
+        liquidity: positionData.liquidity
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        transactionHash: error.hash || ""
+      };
+    }
+  }
+  
+  // 플래시 스왑
+  async executeFlashSwap(
+    borrower: MovementAccount,
+    platformAddress: string,
+    poolKey: string,
+    amount0: number,
+    amount1: number,
+    callbackData: Uint8Array
+  ): Promise<{
+    success: boolean;
+    transactionHash: string;
+    feePaid?: number;
+  }> {
+    try {
+      const payload = {
+        type: "entry_function_payload",
+        function: `${this.moduleAddress}::comprehensive_dex::flash_swap`,
+        type_arguments: [],
+        arguments: [
+          platformAddress,
+          poolKey,
+          amount0.toString(),
+          amount1.toString(),
+          Array.from(callbackData)
+        ]
+      };
+      
+      const txn = await this.client.generateTransaction(borrower.address(), payload);
+      const signedTxn = await this.client.signTransaction(borrower, txn);
+      const response = await this.client.submitTransaction(signedTxn);
+      
+      await this.client.waitForTransaction(response.hash);
+      
+      return {
+        success: true,
+        transactionHash: response.hash,
+        feePaid: await this.extractFlashSwapFee(response.hash)
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        transactionHash: error.hash || ""
+      };
+    }
+  }
+  
+  // 거버넌스 제안 생성
+  async createGovernanceProposal(
+    proposer: MovementAccount,
+    governanceAddress: string,
+    title: string,
+    description: string,
+    proposalType: number,
+    executionData: Uint8Array
+  ): Promise<{
+    success: boolean;
+    transactionHash: string;
+    proposalId?: number;
+  }> {
+    try {
+      const payload = {
+        type: "entry_function_payload",
+        function: `${this.moduleAddress}::dao_system::create_proposal`,
+        type_arguments: [],
+        arguments: [
+          governanceAddress,
+          title,
+          description,
+          proposalType.toString(),
+          Array.from(executionData)
+        ]
+      };
+      
+      const txn = await this.client.generateTransaction(proposer.address(), payload);
+      const signedTxn = await this.client.signTransaction(proposer, txn);
+      const response = await this.client.submitTransaction(signedTxn);
+      
+      await this.client.waitForTransaction(response.hash);
+      
+      return {
+        success: true,
+        transactionHash: response.hash,
+        proposalId: await this.extractProposalId(response.hash)
+      };
+    } catch (error: any) {
+      return {
+        success: false,
+        transactionHash: error.hash || ""
+      };
+    }
+  }
+  
+  // 복합 거래 전략
+  async executeArbitrageStrategy(
+    trader: MovementAccount,
+    platformAddress: string,
+    opportunities: ArbitrageOpportunity[]
+  ): Promise<{
+    success: boolean;
+    transactions: string[];
+    profit: number;
+  }> {
+    const transactions: string[] = [];
+    let totalProfit = 0;
+    
+    for (const opportunity of opportunities) {
+      try {
+        // 플래시 론으로 자금 조달
+        const flashLoanResult = await this.executeFlashSwap(
+          trader,
+          platformAddress,
+          opportunity.flashLoanPool,
+          opportunity.borrowAmount,
+          0,
+          this.encodeArbitrageCallback(opportunity)
+        );
+        
+        if (flashLoanResult.success) {
+          transactions.push(flashLoanResult.transactionHash);
+          totalProfit += opportunity.expectedProfit - (flashLoanResult.feePaid || 0);
+        }
+      } catch (error) {
+        console.error("Arbitrage opportunity failed:", error);
+      }
+    }
+    
+    return {
+      success: transactions.length > 0,
+      transactions,
+      profit: totalProfit
+    };
+  }
+  
+  // 고급 분석 기능
+  async getAdvancedPoolAnalytics(
+    platformAddress: string,
+    poolKey: string,
+    timeframe: '1h' | '24h' | '7d' | '30d'
+  ): Promise<PoolAnalytics> {
+    const poolData = await this.getPoolData(platformAddress, poolKey);
+    const historicalData = await this.getHistoricalData(poolKey, timeframe);
+    
+    return {
+      currentTVL: poolData.tvl,
+      volume24h: historicalData.volume24h,
+      fees24h: historicalData.fees24h,
+      apy: this.calculateAPY(historicalData),
+      priceChange: this.calculatePriceChange(historicalData),
+      impermanentLoss: this.calculateImpermanentLoss(historicalData),
+      liquidityDistribution: await this.getLiquidityDistribution(poolKey),
+      topTrades: await this.getTopTrades(poolKey, timeframe),
+      riskMetrics: this.calculateRiskMetrics(historicalData)
+    };
+  }
+  
+  // 개인화된 수익률 최적화
+  async optimizeYieldStrategy(
+    user: MovementAccount,
+    platformAddress: string,
+    availableTokens: TokenBalance[],
+    riskTolerance: 'low' | 'medium' | 'high',
+    timeHorizon: number
+  ): Promise<YieldStrategy> {
+    const allPools = await this.getAllPools(platformAddress);
+    const userHistory = await this.getUserHistory(user.address());
+    
+    // AI 기반 수익률 예측
+    const predictions = await this.predictPoolReturns(allPools, timeHorizon);
+    
+    // 리스크 조정 수익률 계산
+    const riskAdjustedReturns = this.calculateRiskAdjustedReturns(
+      predictions,
+      riskTolerance
+    );
+    
+    // 포트폴리오 최적화
+    const optimalAllocation = this.optimizePortfolio(
+      availableTokens,
+      riskAdjustedReturns,
+      riskTolerance
+    );
+    
+    return {
+      recommendedPools: optimalAllocation.pools,
+      expectedAPY: optimalAllocation.expectedAPY,
+      estimatedRisk: optimalAllocation.risk,
+      rebalanceSchedule: optimalAllocation.rebalanceSchedule,
+      gasCostEstimate: await this.estimateGasCosts(optimalAllocation.actions)
+    };
+  }
+  
+  // 헬퍼 메서드들
+  
+  private async findOptimalRoute(
+    tokenIn: string,
+    tokenOut: string,
+    amountIn: number
+  ): Promise<OptimalRoute | null> {
+    // 복잡한 라우팅 알고리즘 구현
+    // 다양한 풀과 경로를 탐색하여 최적의 결과 반환
+    return null; // placeholder
+  }
+  
+  private async detectMEVRisk(
+    trader: string,
+    route: OptimalRoute
+  ): Promise<boolean> {
+    // MEV 위험 탐지 로직
+    return false; // placeholder
+  }
+  
+  private async executeProtectedSwap(
+    trader: MovementAccount,
+    platformAddress: string,
+    route: OptimalRoute
+  ) {
+    // MEV 보호된 스왑 실행
+    return { success: false, transactionHash: "" }; // placeholder
+  }
+  
+  private calculatePriceImpact(
+    amountIn: number,
+    amountOut: number,
+    route: OptimalRoute
+  ): number {
+    // 가격 충격 계산
+    return 0; // placeholder
+  }
+  
+  private encodeArbitrageCallback(opportunity: ArbitrageOpportunity): Uint8Array {
+    // 차익거래 콜백 데이터 인코딩
+    return new Uint8Array(); // placeholder
+  }
+  
+  private async extractPoolKey(txHash: string): Promise<string> {
+    // 트랜잭션에서 풀 키 추출
+    return ""; // placeholder
+  }
+  
+  private async extractSwapOutput(txHash: string): Promise<number> {
+    // 스왑 결과 추출
+    return 0; // placeholder
+  }
+  
+  private async extractPositionData(txHash: string) {
+    // 포지션 데이터 추출
+    return { key: "", liquidity: 0 }; // placeholder
+  }
+  
+  private async extractFlashSwapFee(txHash: string): Promise<number> {
+    // 플래시 스왑 수수료 추출
+    return 0; // placeholder
+  }
+  
+  private async extractProposalId(txHash: string): Promise<number> {
+    // 제안 ID 추출
+    return 0; // placeholder
+  }
+}
+
+// 타입 정의들
+interface OptimalRoute {
+  pools: string[];
+  expectedOutput: number;
+  priceImpact: number;
+  gasEstimate: number;
+}
+
+interface ArbitrageOpportunity {
+  flashLoanPool: string;
+  borrowAmount: number;
+  tradingPath: string[];
+  expectedProfit: number;
+}
+
+interface PoolAnalytics {
+  currentTVL: number;
+  volume24h: number;
+  fees24h: number;
+  apy: number;
+  priceChange: number;
+  impermanentLoss: number;
+  liquidityDistribution: LiquidityRange[];
+  topTrades: Trade[];
+  riskMetrics: RiskMetrics;
+}
+
+interface YieldStrategy {
+  recommendedPools: PoolRecommendation[];
+  expectedAPY: number;
+  estimatedRisk: number;
+  rebalanceSchedule: RebalanceAction[];
+  gasCostEstimate: number;
+}
+
+interface TokenBalance {
+  token: string;
+  balance: number;
+}
+
+interface LiquidityRange {
+  tickLower: number;
+  tickUpper: number;
+  liquidity: number;
+}
+
+interface Trade {
+  hash: string;
+  timestamp: number;
+  amountIn: number;
+  amountOut: number;
+  trader: string;
+}
+
+interface RiskMetrics {
+  volatility: number;
+  sharpeRatio: number;
+  maxDrawdown: number;
+  correlationMatrix: number[][];
+}
+
+interface PoolRecommendation {
+  poolKey: string;
+  allocationPercentage: number;
+  expectedAPY: number;
+  riskScore: number;
+}
+
+interface RebalanceAction {
+  scheduledTime: number;
+  actions: string[];
+  estimatedGas: number;
+}
+
+export { ComprehensiveDEXManager };
+```
+
+## 🎯 실전 활용 예시
+
+### DeFi 수익 농업 봇
+```typescript
+class YieldFarmingBot {
+  private dexManager: ComprehensiveDEXManager;
+  private strategies: Strategy[] = [];
+  
+  constructor(dexManager: ComprehensiveDEXManager) {
+    this.dexManager = dexManager;
+  }
+  
+  async startAutomatedFarming(
+    account: MovementAccount,
+    initialCapital: TokenBalance[],
+    targetAPY: number
+  ) {
+    // 지속적인 수익률 최적화 및 자동 리밸런싱
+    setInterval(async () => {
+      const currentPositions = await this.getCurrentPositions(account);
+      const marketConditions = await this.analyzeMarketConditions();
+      
+      if (this.shouldRebalance(currentPositions, marketConditions)) {
+        await this.executeRebalance(account, currentPositions);
+      }
+      
+      // 새로운 기회 탐색
+      const newOpportunities = await this.findNewOpportunities(marketConditions);
+      await this.evaluateAndExecuteOpportunities(account, newOpportunities);
+      
+    }, 300000); // 5분마다 실행
+  }
+  
+  private async findNewOpportunities(conditions: MarketConditions): Promise<Opportunity[]> {
+    // ML 기반 기회 탐지
+    return [];
+  }
+}
+```
+
+## 🔗 다음 단계
+
+DEX & AMM 구현을 마스터했다면:
+
+**[대출 및 차용 시스템 구축 →](./lending-borrowing-system)**
+
+## 📚 참고 자료
+
+- [Uniswap V3 백서](https://uniswap.org/whitepaper-v3.pdf)
+- [Curve Finance 문서](https://curve.fi/files/crypto-pools-paper.pdf)
+- [AMM 설계 패턴](https://ethereum.org/en/developers/docs/dapps/amm/)
+- [MEV 보호 전략](https://ethereum.org/en/developers/docs/mev/)
+
+---
+
+*Movement Network에서 차세대 DeFi 인프라를 구축하세요! 🌊🚀*

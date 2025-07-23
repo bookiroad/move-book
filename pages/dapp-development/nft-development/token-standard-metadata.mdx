@@ -1,0 +1,1076 @@
+# 📋 Token Standard & Metadata
+
+Movement Network의 NFT 표준과 메타데이터 시스템을 완전히 마스터하는 가이드입니다. 효율적인 메타데이터 관리부터 IPFS 통합까지, 프로덕션 레벨의 NFT 시스템 구축 방법을 다룹니다.
+
+## 🎯 학습 목표
+
+이 섹션을 완료하면:
+- Movement Token Standard의 모든 기능을 활용할 수 있습니다
+- 최적화된 JSON 메타데이터 스키마를 설계할 수 있습니다
+- IPFS와 분산 저장 시스템을 통합할 수 있습니다
+- 온체인과 오프체인 메타데이터 전략을 결정할 수 있습니다
+- 메타데이터 업데이트와 버전 관리를 구현할 수 있습니다
+
+## 🏗️ Movement Token Standard 심화
+
+### Token Standard 아키텍처
+```move
+module movement_token::digital_asset {
+    use std::string::{Self, String};
+    use std::option::{Self, Option};
+    use aptos_framework::object::{Self, Object, ConstructorRef, DeleteRef};
+    use aptos_token_objects::collection::{Self, Collection};
+    use aptos_token_objects::token::{Self, Token};
+    use aptos_token_objects::property_map::{Self, PropertyMap};
+    use aptos_token_objects::royalty::{Self, Royalty};
+    
+    /// Movement Token의 확장된 구조
+    #[resource_group_member(group = aptos_framework::object::ObjectGroup)]
+    struct MovementToken has key {
+        // 기본 메타데이터
+        name: String,
+        description: String,
+        uri: String,
+        
+        // 확장 속성
+        properties: PropertyMap,
+        
+        // 버전 관리
+        metadata_version: u64,
+        schema_version: String,
+        
+        // 업데이트 이력
+        update_history: vector<MetadataUpdate>,
+        
+        // 접근 제어
+        mutability_config: TokenMutabilityConfig,
+        
+        // 추가 기능
+        utility_functions: vector<String>,
+        interaction_count: u64,
+        last_interaction: u64
+    }
+    
+    /// 메타데이터 업데이트 기록
+    struct MetadataUpdate has store, drop, copy {
+        field_name: String,
+        old_value: String,
+        new_value: String,
+        updated_by: address,
+        timestamp: u64,
+        reason: String
+    }
+    
+    /// 토큰 가변성 설정
+    struct TokenMutabilityConfig has store, drop, copy {
+        description_mutable: bool,
+        uri_mutable: bool,
+        properties_mutable: bool,
+        royalty_mutable: bool,
+        
+        // 제한된 가변성
+        mutation_limit: Option<u64>,
+        current_mutations: u64,
+        
+        // 권한 기반 변경
+        authorized_mutators: vector<address>
+    }
+    
+    /// 표준 호환 토큰 생성
+    public fun create_standard_token(
+        creator: &signer,
+        collection: Object<Collection>,
+        name: String,
+        description: String,
+        uri: String,
+        properties: PropertyMap,
+        royalty: Option<Royalty>,
+        mutability_config: TokenMutabilityConfig
+    ): Object<MovementToken> {
+        let creator_addr = signer::address_of(creator);
+        
+        // 기본 토큰 생성 (Aptos Token Objects 사용)
+        let constructor_ref = token::create_named_token(
+            creator,
+            collection::name(collection),
+            description,
+            name,
+            royalty,
+            uri
+        );
+        
+        let token_signer = object::generate_signer(&constructor_ref);
+        
+        // 확장된 MovementToken 리소스 추가
+        let movement_token = MovementToken {
+            name,
+            description,
+            uri,
+            properties,
+            metadata_version: 1,
+            schema_version: string::utf8(b"1.0.0"),
+            update_history: vector::empty(),
+            mutability_config,
+            utility_functions: vector::empty(),
+            interaction_count: 0,
+            last_interaction: timestamp::now_seconds()
+        };
+        
+        move_to(&token_signer, movement_token);
+        
+        // 속성 설정 (표준 호환)
+        if (!property_map::is_empty(&properties)) {
+            token::add_property(&constructor_ref, properties);
+        };
+        
+        object::object_from_constructor_ref<MovementToken>(&constructor_ref)
+    }
+    
+    /// 메타데이터 업데이트 (권한 확인 포함)
+    public fun update_token_metadata(
+        updater: &signer,
+        token_obj: Object<MovementToken>,
+        field: String,
+        new_value: String,
+        reason: String
+    ) acquires MovementToken {
+        let updater_addr = signer::address_of(updater);
+        let token_addr = object::object_address(&token_obj);
+        let token = borrow_global_mut<MovementToken>(token_addr);
+        
+        // 권한 확인
+        assert!(
+            vector::contains(&token.mutability_config.authorized_mutators, &updater_addr) ||
+            object::owner(token_obj) == updater_addr,
+            E_NOT_AUTHORIZED_TO_UPDATE
+        );
+        
+        // 가변성 확인
+        assert!(is_field_mutable(&token.mutability_config, &field), E_FIELD_NOT_MUTABLE);
+        
+        // 변경 횟수 제한 확인
+        if (option::is_some(&token.mutability_config.mutation_limit)) {
+            let limit = *option::borrow(&token.mutability_config.mutation_limit);
+            assert!(token.mutability_config.current_mutations < limit, E_MUTATION_LIMIT_EXCEEDED);
+        };
+        
+        // 기존 값 저장
+        let old_value = get_field_value(token, &field);
+        
+        // 새 값 설정
+        set_field_value(token, &field, &new_value);
+        
+        // 업데이트 기록 추가
+        let update_record = MetadataUpdate {
+            field_name: field,
+            old_value,
+            new_value,
+            updated_by: updater_addr,
+            timestamp: timestamp::now_seconds(),
+            reason
+        };
+        
+        vector::push_back(&mut token.update_history, update_record);
+        token.mutability_config.current_mutations = token.mutability_config.current_mutations + 1;
+        token.metadata_version = token.metadata_version + 1;
+    }
+    
+    /// 배치 속성 업데이트
+    public fun batch_update_properties(
+        updater: &signer,
+        token_obj: Object<MovementToken>,
+        property_updates: vector<(String, PropertyValue)>,
+        reason: String
+    ) acquires MovementToken {
+        let updater_addr = signer::address_of(updater);
+        let token_addr = object::object_address(&token_obj);
+        let token = borrow_global_mut<MovementToken>(token_addr);
+        
+        // 권한 확인
+        assert!(
+            vector::contains(&token.mutability_config.authorized_mutators, &updater_addr) ||
+            object::owner(token_obj) == updater_addr,
+            E_NOT_AUTHORIZED_TO_UPDATE
+        );
+        
+        assert!(token.mutability_config.properties_mutable, E_PROPERTIES_NOT_MUTABLE);
+        
+        let i = 0;
+        while (i < vector::length(&property_updates)) {
+            let (key, value) = *vector::borrow(&property_updates, i);
+            
+            // 기존 값 가져오기
+            let old_value = if (property_map::contains_key(&token.properties, &key)) {
+                property_value_to_string(property_map::read(&token.properties, &key))
+            } else {
+                string::utf8(b"")
+            };
+            
+            // 새 값 설정
+            property_map::add(&mut token.properties, key, value);
+            
+            // 업데이트 기록
+            let update_record = MetadataUpdate {
+                field_name: key,
+                old_value,
+                new_value: property_value_to_string(&value),
+                updated_by: updater_addr,
+                timestamp: timestamp::now_seconds(),
+                reason
+            };
+            
+            vector::push_back(&mut token.update_history, update_record);
+            i = i + 1;
+        };
+        
+        token.metadata_version = token.metadata_version + 1;
+    }
+    
+    /// 토큰 상호작용 기록
+    public fun record_interaction(
+        user: &signer,
+        token_obj: Object<MovementToken>,
+        interaction_type: String
+    ) acquires MovementToken {
+        let token_addr = object::object_address(&token_obj);
+        let token = borrow_global_mut<MovementToken>(token_addr);
+        
+        token.interaction_count = token.interaction_count + 1;
+        token.last_interaction = timestamp::now_seconds();
+        
+        // 유틸리티 함수에 상호작용 타입 추가 (중복 제거)
+        if (!vector::contains(&token.utility_functions, &interaction_type)) {
+            vector::push_back(&mut token.utility_functions, interaction_type);
+        };
+    }
+    
+    /// 토큰 정보 조회
+    public fun get_token_info(token_obj: Object<MovementToken>): TokenInfo acquires MovementToken {
+        let token_addr = object::object_address(&token_obj);
+        let token = borrow_global<MovementToken>(token_addr);
+        
+        TokenInfo {
+            name: token.name,
+            description: token.description,
+            uri: token.uri,
+            owner: object::owner(token_obj),
+            creator: token::creator(token_obj),
+            collection: token::collection_object(token_obj),
+            metadata_version: token.metadata_version,
+            schema_version: token.schema_version,
+            interaction_count: token.interaction_count,
+            last_interaction: token.last_interaction,
+            update_count: vector::length(&token.update_history),
+            utility_functions: token.utility_functions,
+            is_mutable: is_token_mutable(&token.mutability_config)
+        }
+    }
+    
+    struct TokenInfo has drop {
+        name: String,
+        description: String,
+        uri: String,
+        owner: address,
+        creator: address,
+        collection: Object<Collection>,
+        metadata_version: u64,
+        schema_version: String,
+        interaction_count: u64,
+        last_interaction: u64,
+        update_count: u64,
+        utility_functions: vector<String>,
+        is_mutable: bool
+    }
+    
+    // 헬퍼 함수들
+    fun is_field_mutable(config: &TokenMutabilityConfig, field: &String): bool {
+        if (field == &string::utf8(b"description")) {
+            config.description_mutable
+        } else if (field == &string::utf8(b"uri")) {
+            config.uri_mutable
+        } else if (field == &string::utf8(b"properties")) {
+            config.properties_mutable
+        } else {
+            false
+        }
+    }
+    
+    fun get_field_value(token: &MovementToken, field: &String): String {
+        if (field == &string::utf8(b"description")) {
+            token.description
+        } else if (field == &string::utf8(b"uri")) {
+            token.uri
+        } else if (field == &string::utf8(b"name")) {
+            token.name
+        } else {
+            string::utf8(b"")
+        }
+    }
+    
+    fun set_field_value(token: &mut MovementToken, field: &String, value: &String) {
+        if (field == &string::utf8(b"description")) {
+            token.description = *value;
+        } else if (field == &string::utf8(b"uri")) {
+            token.uri = *value;
+        }
+        // name은 불변
+    }
+    
+    fun is_token_mutable(config: &TokenMutabilityConfig): bool {
+        config.description_mutable || config.uri_mutable || config.properties_mutable
+    }
+    
+    fun property_value_to_string(value: &PropertyValue): String {
+        // PropertyValue를 String으로 변환하는 로직
+        // 실제로는 PropertyValue의 타입에 따라 적절히 변환
+        string::utf8(b"property_value")  // placeholder
+    }
+    
+    // 에러 코드
+    const E_NOT_AUTHORIZED_TO_UPDATE: u64 = 1;
+    const E_FIELD_NOT_MUTABLE: u64 = 2;
+    const E_MUTATION_LIMIT_EXCEEDED: u64 = 3;
+    const E_PROPERTIES_NOT_MUTABLE: u64 = 4;
+}
+```
+
+## 📄 JSON 메타데이터 스키마 설계
+
+### OpenSea 호환 표준 메타데이터
+```typescript
+// Movement NFT 메타데이터 표준 스키마
+interface MovementNFTMetadata {
+  // 필수 필드
+  name: string;
+  description: string;
+  image: string;
+  
+  // 확장 필드
+  external_url?: string;
+  animation_url?: string;
+  youtube_url?: string;
+  
+  // 속성 (OpenSea 호환)
+  attributes: Array<{
+    trait_type: string;
+    value: string | number;
+    display_type?: "number" | "date" | "boost_number" | "boost_percentage";
+    max_value?: number;
+  }>;
+  
+  // Movement 특화 필드
+  movement_metadata: {
+    schema_version: string;
+    created_at: number;
+    updated_at: number;
+    creator: string;
+    collection: string;
+    token_standard: "movement-nft-v1";
+    
+    // 동적 속성
+    dynamic_attributes?: Array<{
+      name: string;
+      type: "string" | "number" | "boolean" | "object";
+      mutable: boolean;
+      current_value: any;
+      history?: Array<{
+        value: any;
+        timestamp: number;
+        block_height: number;
+      }>;
+    }>;
+    
+    // 유틸리티 정보
+    utility: {
+      functions: string[];
+      access_rights: string[];
+      expiry_date?: number;
+      usage_count: number;
+    };
+    
+    // 로열티 정보
+    royalty: {
+      percentage: number; // basis points
+      recipients: Array<{
+        address: string;
+        share: number; // basis points
+      }>;
+    };
+    
+    // 제작 정보
+    provenance: {
+      artist?: string;
+      creation_method: "hand_drawn" | "generative" | "ai_generated" | "photography" | "other";
+      software_used?: string[];
+      creation_date: number;
+      edition_info?: {
+        edition_number: number;
+        total_editions: number;
+      };
+    };
+  };
+  
+  // 컬렉션 정보
+  collection: {
+    name: string;
+    family?: string;
+    description?: string;
+    image?: string;
+    external_url?: string;
+  };
+  
+  // 게임 관련 속성 (해당하는 경우)
+  game_attributes?: {
+    level?: number;
+    experience?: number;
+    rarity_rank?: number;
+    stats?: Record<string, number>;
+    equipped_items?: string[];
+    abilities?: string[];
+  };
+}
+
+// 메타데이터 검증 클래스
+class MetadataValidator {
+  static validate(metadata: MovementNFTMetadata): ValidationResult {
+    const errors: string[] = [];
+    const warnings: string[] = [];
+    
+    // 필수 필드 확인
+    if (!metadata.name || metadata.name.trim().length === 0) {
+      errors.push("Name is required");
+    }
+    
+    if (!metadata.description || metadata.description.trim().length === 0) {
+      errors.push("Description is required");
+    }
+    
+    if (!metadata.image || !this.isValidUrl(metadata.image)) {
+      errors.push("Valid image URL is required");
+    }
+    
+    // URL 검증
+    if (metadata.external_url && !this.isValidUrl(metadata.external_url)) {
+      warnings.push("External URL format may be invalid");
+    }
+    
+    if (metadata.animation_url && !this.isValidUrl(metadata.animation_url)) {
+      warnings.push("Animation URL format may be invalid");
+    }
+    
+    // 속성 검증
+    if (!metadata.attributes || metadata.attributes.length === 0) {
+      warnings.push("No attributes defined - consider adding traits");
+    }
+    
+    metadata.attributes?.forEach((attr, index) => {
+      if (!attr.trait_type || !attr.value) {
+        errors.push(`Attribute ${index}: trait_type and value are required`);
+      }
+    });
+    
+    // Movement 특화 필드 검증
+    if (metadata.movement_metadata) {
+      if (!metadata.movement_metadata.schema_version) {
+        errors.push("Movement metadata schema_version is required");
+      }
+      
+      // 로열티 검증
+      if (metadata.movement_metadata.royalty) {
+        const royalty = metadata.movement_metadata.royalty;
+        if (royalty.percentage < 0 || royalty.percentage > 1000) {
+          errors.push("Royalty percentage must be between 0 and 1000 basis points (0-10%)");
+        }
+        
+        const totalShares = royalty.recipients.reduce((sum, recipient) => sum + recipient.share, 0);
+        if (totalShares !== 10000) {
+          errors.push("Royalty recipient shares must sum to 10000 basis points (100%)");
+        }
+      }
+    }
+    
+    return {
+      isValid: errors.length === 0,
+      errors,
+      warnings
+    };
+  }
+  
+  private static isValidUrl(url: string): boolean {
+    try {
+      new URL(url);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+interface ValidationResult {
+  isValid: boolean;
+  errors: string[];
+  warnings: string[];
+}
+```
+
+### 메타데이터 생성 도구
+```typescript
+// NFT 메타데이터 빌더 클래스
+class NFTMetadataBuilder {
+  private metadata: Partial<MovementNFTMetadata> = {
+    attributes: [],
+    movement_metadata: {
+      schema_version: "1.0.0",
+      created_at: Date.now(),
+      updated_at: Date.now(),
+      token_standard: "movement-nft-v1",
+      utility: {
+        functions: [],
+        access_rights: [],
+        usage_count: 0
+      },
+      provenance: {
+        creation_method: "other",
+        creation_date: Date.now()
+      }
+    }
+  };
+  
+  // 기본 정보 설정
+  setBasicInfo(name: string, description: string, imageUrl: string): this {
+    this.metadata.name = name;
+    this.metadata.description = description;
+    this.metadata.image = imageUrl;
+    return this;
+  }
+  
+  // 속성 추가
+  addAttribute(traitType: string, value: string | number, displayType?: string): this {
+    if (!this.metadata.attributes) {
+      this.metadata.attributes = [];
+    }
+    
+    this.metadata.attributes.push({
+      trait_type: traitType,
+      value,
+      display_type: displayType
+    });
+    
+    return this;
+  }
+  
+  // 동적 속성 추가
+  addDynamicAttribute(
+    name: string,
+    type: "string" | "number" | "boolean" | "object",
+    initialValue: any,
+    mutable: boolean = true
+  ): this {
+    if (!this.metadata.movement_metadata.dynamic_attributes) {
+      this.metadata.movement_metadata.dynamic_attributes = [];
+    }
+    
+    this.metadata.movement_metadata.dynamic_attributes.push({
+      name,
+      type,
+      mutable,
+      current_value: initialValue
+    });
+    
+    return this;
+  }
+  
+  // 로열티 설정
+  setRoyalty(percentage: number, recipients: Array<{address: string, share: number}>): this {
+    this.metadata.movement_metadata.royalty = {
+      percentage,
+      recipients
+    };
+    return this;
+  }
+  
+  // 컬렉션 정보 설정
+  setCollection(name: string, description?: string, imageUrl?: string): this {
+    this.metadata.collection = {
+      name,
+      description,
+      image: imageUrl
+    };
+    return this;
+  }
+  
+  // 게임 속성 설정
+  setGameAttributes(attributes: {
+    level?: number;
+    experience?: number;
+    rarity_rank?: number;
+    stats?: Record<string, number>;
+  }): this {
+    this.metadata.game_attributes = attributes;
+    return this;
+  }
+  
+  // 유틸리티 함수 추가
+  addUtilityFunction(functionName: string): this {
+    this.metadata.movement_metadata.utility.functions.push(functionName);
+    return this;
+  }
+  
+  // 제작 정보 설정
+  setProvenance(info: {
+    artist?: string;
+    creation_method: "hand_drawn" | "generative" | "ai_generated" | "photography" | "other";
+    software_used?: string[];
+  }): this {
+    Object.assign(this.metadata.movement_metadata.provenance, info);
+    return this;
+  }
+  
+  // 메타데이터 빌드 및 검증
+  build(): MovementNFTMetadata {
+    const metadata = this.metadata as MovementNFTMetadata;
+    
+    // 필수 필드 확인
+    if (!metadata.name || !metadata.description || !metadata.image) {
+      throw new Error("Name, description, and image are required");
+    }
+    
+    // 메타데이터 업데이트 시간 설정
+    metadata.movement_metadata.updated_at = Date.now();
+    
+    // 검증
+    const validation = MetadataValidator.validate(metadata);
+    if (!validation.isValid) {
+      throw new Error(`Metadata validation failed: ${validation.errors.join(", ")}`);
+    }
+    
+    return metadata;
+  }
+  
+  // JSON 문자열로 변환
+  toJSON(): string {
+    return JSON.stringify(this.build(), null, 2);
+  }
+}
+
+// 사용 예시
+const nftMetadata = new NFTMetadataBuilder()
+  .setBasicInfo(
+    "Cosmic Dragon #1",
+    "A legendary cosmic dragon with mystical powers",
+    "ipfs://QmYourImageHash"
+  )
+  .addAttribute("Rarity", "Legendary")
+  .addAttribute("Element", "Cosmic")
+  .addAttribute("Power Level", 9000, "number")
+  .addAttribute("Birth Date", Date.now(), "date")
+  .addDynamicAttribute("Level", "number", 1, true)
+  .addDynamicAttribute("Experience", "number", 0, true)
+  .setRoyalty(500, [{ address: "0x123...", share: 10000 }]) // 5% royalty
+  .setCollection("Cosmic Dragons", "A collection of mystical dragons")
+  .setGameAttributes({
+    level: 1,
+    experience: 0,
+    rarity_rank: 1,
+    stats: {
+      strength: 95,
+      intelligence: 88,
+      agility: 76,
+      defense: 92
+    }
+  })
+  .addUtilityFunction("battle")
+  .addUtilityFunction("breeding")
+  .setProvenance({
+    artist: "CosmicArtist",
+    creation_method: "generative",
+    software_used: ["Photoshop", "AI Tools"]
+  })
+  .build();
+```
+
+## 🌐 IPFS 통합 및 분산 저장
+
+### IPFS 메타데이터 관리자
+```typescript
+import { create, IPFSHTTPClient } from 'ipfs-http-client';
+import { Web3Storage, File } from 'web3.storage';
+import pinataSDK from '@pinata/sdk';
+
+class IPFSMetadataManager {
+  private ipfs: IPFSHTTPClient;
+  private web3Storage?: Web3Storage;
+  private pinata?: any;
+  
+  constructor(config: {
+    ipfsNodeUrl?: string;
+    web3StorageToken?: string;
+    pinataApiKey?: string;
+    pinataSecretKey?: string;
+  }) {
+    // IPFS 노드 연결
+    this.ipfs = create({
+      url: config.ipfsNodeUrl || 'https://ipfs.infura.io:5001/api/v0'
+    });
+    
+    // Web3.Storage 설정
+    if (config.web3StorageToken) {
+      this.web3Storage = new Web3Storage({ 
+        token: config.web3StorageToken 
+      });
+    }
+    
+    // Pinata 설정
+    if (config.pinataApiKey && config.pinataSecretKey) {
+      this.pinata = new pinataSDK(config.pinataApiKey, config.pinataSecretKey);
+    }
+  }
+  
+  // 이미지 파일 업로드
+  async uploadImage(
+    imageFile: File | Buffer,
+    fileName: string,
+    options: {
+      pin: boolean;
+      provider: 'ipfs' | 'web3storage' | 'pinata';
+    } = { pin: true, provider: 'ipfs' }
+  ): Promise<string> {
+    try {
+      let cid: string;
+      
+      switch (options.provider) {
+        case 'web3storage':
+          if (!this.web3Storage) throw new Error('Web3.Storage not configured');
+          const file = new File([imageFile], fileName);
+          cid = await this.web3Storage.put([file]);
+          break;
+          
+        case 'pinata':
+          if (!this.pinata) throw new Error('Pinata not configured');
+          const pinataResult = await this.pinata.pinFileToIPFS(imageFile, {
+            pinataMetadata: { name: fileName }
+          });
+          cid = pinataResult.IpfsHash;
+          break;
+          
+        default: // 'ipfs'
+          const addResult = await this.ipfs.add(imageFile);
+          cid = addResult.cid.toString();
+          
+          if (options.pin) {
+            await this.ipfs.pin.add(cid);
+          }
+          break;
+      }
+      
+      return `ipfs://${cid}`;
+    } catch (error) {
+      throw new Error(`Failed to upload image: ${error.message}`);
+    }
+  }
+  
+  // 메타데이터 JSON 업로드
+  async uploadMetadata(
+    metadata: MovementNFTMetadata,
+    options: {
+      pin: boolean;
+      provider: 'ipfs' | 'web3storage' | 'pinata';
+      compress: boolean;
+    } = { pin: true, provider: 'ipfs', compress: false }
+  ): Promise<string> {
+    try {
+      let metadataJson = JSON.stringify(metadata, null, options.compress ? 0 : 2);
+      
+      // 압축 옵션이 활성화된 경우
+      if (options.compress) {
+        metadataJson = this.compressMetadata(metadataJson);
+      }
+      
+      const buffer = Buffer.from(metadataJson, 'utf8');
+      let cid: string;
+      
+      switch (options.provider) {
+        case 'web3storage':
+          if (!this.web3Storage) throw new Error('Web3.Storage not configured');
+          const file = new File([buffer], 'metadata.json', { type: 'application/json' });
+          cid = await this.web3Storage.put([file]);
+          break;
+          
+        case 'pinata':
+          if (!this.pinata) throw new Error('Pinata not configured');
+          const pinataResult = await this.pinata.pinJSONToIPFS(metadata, {
+            pinataMetadata: { name: `${metadata.name}_metadata` }
+          });
+          cid = pinataResult.IpfsHash;
+          break;
+          
+        default: // 'ipfs'
+          const addResult = await this.ipfs.add(buffer);
+          cid = addResult.cid.toString();
+          
+          if (options.pin) {
+            await this.ipfs.pin.add(cid);
+          }
+          break;
+      }
+      
+      return `ipfs://${cid}`;
+    } catch (error) {
+      throw new Error(`Failed to upload metadata: ${error.message}`);
+    }
+  }
+  
+  // 전체 NFT 에셋 업로드 (이미지 + 메타데이터)
+  async uploadCompleteNFTAsset(
+    imageFile: File | Buffer,
+    metadata: Omit<MovementNFTMetadata, 'image'>,
+    options: {
+      imageFileName: string;
+      pin: boolean;
+      provider: 'ipfs' | 'web3storage' | 'pinata';
+      compress: boolean;
+    }
+  ): Promise<{ imageUri: string; metadataUri: string }> {
+    // 1. 이미지 업로드
+    console.log('Uploading image...');
+    const imageUri = await this.uploadImage(imageFile, options.imageFileName, {
+      pin: options.pin,
+      provider: options.provider
+    });
+    
+    // 2. 메타데이터에 이미지 URI 추가
+    const completeMetadata: MovementNFTMetadata = {
+      ...metadata,
+      image: imageUri
+    };
+    
+    // 3. 메타데이터 업로드
+    console.log('Uploading metadata...');
+    const metadataUri = await this.uploadMetadata(completeMetadata, {
+      pin: options.pin,
+      provider: options.provider,
+      compress: options.compress
+    });
+    
+    return { imageUri, metadataUri };
+  }
+  
+  // 메타데이터 조회
+  async getMetadata(ipfsUri: string): Promise<MovementNFTMetadata> {
+    try {
+      const cid = ipfsUri.replace('ipfs://', '');
+      const chunks = [];
+      
+      for await (const chunk of this.ipfs.cat(cid)) {
+        chunks.push(chunk);
+      }
+      
+      const buffer = Buffer.concat(chunks);
+      const metadataJson = buffer.toString('utf8');
+      
+      return JSON.parse(metadataJson) as MovementNFTMetadata;
+    } catch (error) {
+      throw new Error(`Failed to get metadata: ${error.message}`);
+    }
+  }
+  
+  // 메타데이터 업데이트 (새 버전 생성)
+  async updateMetadata(
+    originalUri: string,
+    updates: Partial<MovementNFTMetadata>,
+    options: {
+      pin: boolean;
+      provider: 'ipfs' | 'web3storage' | 'pinata';
+    } = { pin: true, provider: 'ipfs' }
+  ): Promise<string> {
+    // 1. 기존 메타데이터 조회
+    const originalMetadata = await this.getMetadata(originalUri);
+    
+    // 2. 업데이트 적용
+    const updatedMetadata: MovementNFTMetadata = {
+      ...originalMetadata,
+      ...updates,
+      movement_metadata: {
+        ...originalMetadata.movement_metadata,
+        ...updates.movement_metadata,
+        updated_at: Date.now()
+      }
+    };
+    
+    // 3. 새 메타데이터 업로드
+    return await this.uploadMetadata(updatedMetadata, {
+      pin: options.pin,
+      provider: options.provider,
+      compress: false
+    });
+  }
+  
+  // 배치 업로드
+  async batchUploadAssets(
+    assets: Array<{
+      imageFile: File | Buffer;
+      metadata: Omit<MovementNFTMetadata, 'image'>;
+      imageFileName: string;
+    }>,
+    options: {
+      pin: boolean;
+      provider: 'ipfs' | 'web3storage' | 'pinata';
+      concurrency: number;
+    } = { pin: true, provider: 'ipfs', concurrency: 3 }
+  ): Promise<Array<{ imageUri: string; metadataUri: string; index: number }>> {
+    const results = [];
+    const batches = this.createBatches(assets, options.concurrency);
+    
+    for (const batch of batches) {
+      const batchPromises = batch.map(async ({ asset, index }) => {
+        try {
+          const result = await this.uploadCompleteNFTAsset(
+            asset.imageFile,
+            asset.metadata,
+            {
+              imageFileName: asset.imageFileName,
+              pin: options.pin,
+              provider: options.provider,
+              compress: false
+            }
+          );
+          
+          return { ...result, index };
+        } catch (error) {
+          console.error(`Failed to upload asset ${index}:`, error);
+          throw error;
+        }
+      });
+      
+      const batchResults = await Promise.all(batchPromises);
+      results.push(...batchResults);
+      
+      // 배치 간 지연 (API 제한 대응)
+      if (batches.indexOf(batch) < batches.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+    }
+    
+    return results.sort((a, b) => a.index - b.index);
+  }
+  
+  // 메타데이터 압축 (선택적)
+  private compressMetadata(metadataJson: string): string {
+    // 불필요한 공백 제거 및 데이터 최적화
+    const metadata = JSON.parse(metadataJson);
+    
+    // 빈 배열이나 객체 제거
+    Object.keys(metadata).forEach(key => {
+      if (Array.isArray(metadata[key]) && metadata[key].length === 0) {
+        delete metadata[key];
+      } else if (typeof metadata[key] === 'object' && Object.keys(metadata[key]).length === 0) {
+        delete metadata[key];
+      }
+    });
+    
+    return JSON.stringify(metadata);
+  }
+  
+  // 배치 생성 헬퍼
+  private createBatches<T>(items: T[], batchSize: number): Array<Array<{ asset: T; index: number }>> {
+    const batches = [];
+    for (let i = 0; i < items.length; i += batchSize) {
+      const batch = items.slice(i, i + batchSize).map((asset, idx) => ({
+        asset,
+        index: i + idx
+      }));
+      batches.push(batch);
+    }
+    return batches;
+  }
+  
+  // 핀 상태 확인
+  async checkPinStatus(cid: string): Promise<boolean> {
+    try {
+      const pins = await this.ipfs.pin.ls();
+      for await (const pin of pins) {
+        if (pin.cid.toString() === cid) {
+          return true;
+        }
+      }
+      return false;
+    } catch (error) {
+      console.error('Failed to check pin status:', error);
+      return false;
+    }
+  }
+  
+  // 저장소 사용량 통계
+  async getStorageStats(): Promise<{
+    totalSize: number;
+    pinnedCount: number;
+    provider: string;
+  }> {
+    try {
+      const stats = await this.ipfs.stats.repo();
+      const pins = await this.ipfs.pin.ls();
+      let pinnedCount = 0;
+      
+      for await (const pin of pins) {
+        pinnedCount++;
+      }
+      
+      return {
+        totalSize: stats.repoSize,
+        pinnedCount,
+        provider: 'ipfs'
+      };
+    } catch (error) {
+      console.error('Failed to get storage stats:', error);
+      return { totalSize: 0, pinnedCount: 0, provider: 'unknown' };
+    }
+  }
+}
+
+// 사용 예시
+async function uploadNFTCollection() {
+  const ipfsManager = new IPFSMetadataManager({
+    web3StorageToken: 'your-web3-storage-token',
+    pinataApiKey: 'your-pinata-api-key',
+    pinataSecretKey: 'your-pinata-secret-key'
+  });
+  
+  // 단일 NFT 업로드
+  const imageFile = new File([/* image buffer */], 'dragon.png');
+  const metadata = new NFTMetadataBuilder()
+    .setBasicInfo("Cosmic Dragon #1", "A legendary dragon", "")
+    .addAttribute("Rarity", "Legendary")
+    .build();
+  
+  const { imageUri, metadataUri } = await ipfsManager.uploadCompleteNFTAsset(
+    imageFile,
+    metadata,
+    {
+      imageFileName: 'cosmic_dragon_1.png',
+      pin: true,
+      provider: 'web3storage',
+      compress: true
+    }
+  );
+  
+  console.log('Image URI:', imageUri);
+  console.log('Metadata URI:', metadataUri);
+}
+```
+
+## 🔗 다음 단계
+
+Token Standard와 Metadata를 마스터했다면:
+
+**[Resource Account 활용 →](/dapp-development/nft-development/resource-account-integration)**
+
+## 📚 참고 자료
+
+- [Movement 개발자 포털](https://developer.movementnetwork.xyz/)
+- [Movement Token Standard](https://docs.movementnetwork.xyz/token-standard)
+- [IPFS 문서](https://docs.ipfs.io/)
+- [OpenSea 메타데이터 표준](https://docs.opensea.io/docs/metadata-standards)
+
+---
+
+*Movement Network에서 표준 호환 NFT와 최적화된 메타데이터 시스템을 구축하세요! 📋⚡*

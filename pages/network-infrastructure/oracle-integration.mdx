@@ -1,0 +1,813 @@
+# 🔮 Oracle 연동 (Pyth)
+
+Movement Network에서 Pyth Oracle을 활용하여 실시간 외부 데이터를 스마트 계약에 통합하는 방법을 알아보겠습니다. DeFi 프로토콜 구축에 필수적인 Oracle 활용법을 다룹니다.
+
+## 🎯 학습 목표
+
+이 섹션을 완료하면:
+- Oracle의 개념과 필요성을 완전히 이해할 수 있습니다
+- Pyth Oracle을 Movement 스마트 계약에 통합할 수 있습니다
+- 가격 피드 데이터를 안전하게 활용할 수 있습니다
+- Oracle 기반 DeFi 프로토콜을 구축할 수 있습니다
+
+## 🌐 Oracle 기초 개념
+
+### Oracle이란?
+```
+Oracle = 블록체인과 외부 세계를 연결하는 다리
+
+외부 데이터 소스 ←→ Oracle Network ←→ 블록체인 스마트 계약
+     │                    │                    │
+  실제 가격 정보        검증된 데이터       DeFi 프로토콜
+  날씨 정보            암호화된 전송        예측 시장
+  스포츠 결과          분산 검증           보험 계약
+```
+
+### Oracle Problem (오라클 문제)
+```yaml
+블록체인의 한계:
+  ❌ 외부 데이터 접근 불가
+  ❌ 인터넷 연결 없음
+  ❌ API 호출 불가능
+  ❌ 실시간 정보 부족
+
+Oracle이 해결하는 문제:
+  ✅ 신뢰할 수 있는 외부 데이터
+  ✅ 탈중앙화된 검증
+  ✅ 실시간 업데이트
+  ✅ 조작 방지 메커니즘
+```
+
+### Pyth Network 개요
+```
+Pyth Network 특징:
+
+🚀 고주파 업데이트
+├── 밀리초 단위 가격 업데이트
+├── 높은 정확도
+└── 낮은 지연시간
+
+🏦 프리미엄 데이터 소스
+├── 전통 금융 기관
+├── 암호화폐 거래소
+├── 마켓 메이커
+└── DeFi 프로토콜
+
+🔒 강력한 보안
+├── 다중 소스 검증
+├── 스테이킹 기반 인센티브
+├── 슬래싱 메커니즘
+└── 투명한 데이터 품질
+```
+
+## 📊 Pyth 가격 피드 종류
+
+### 지원하는 자산 클래스
+```typescript
+export const PYTH_ASSET_CLASSES = {
+  crypto: {
+    major: ['BTC/USD', 'ETH/USD', 'MOVE/USD', 'SOL/USD'],
+    altcoins: ['LINK/USD', 'UNI/USD', 'AAVE/USD', 'COMP/USD'],
+    stablecoins: ['USDC/USD', 'USDT/USD', 'DAI/USD', 'FRAX/USD']
+  },
+  
+  equities: {
+    indices: ['SPY', 'QQQ', 'VTI', 'IWM'],
+    individual: ['AAPL/USD', 'MSFT/USD', 'GOOGL/USD', 'TSLA/USD']
+  },
+  
+  commodities: {
+    metals: ['GOLD/USD', 'SILVER/USD', 'COPPER/USD'],
+    energy: ['WTI/USD', 'BRENT/USD', 'NATGAS/USD'],
+    agriculture: ['CORN/USD', 'WHEAT/USD', 'SOYBEAN/USD']
+  },
+  
+  forex: {
+    majors: ['EUR/USD', 'GBP/USD', 'JPY/USD', 'AUD/USD'],
+    emerging: ['CNY/USD', 'INR/USD', 'BRL/USD', 'KRW/USD']
+  }
+};
+```
+
+### Movement Network에서 사용 가능한 피드
+```typescript
+// Movement 네트워크별 Pyth 피드 ID
+export const MOVEMENT_PYTH_FEEDS = {
+  mainnet: {
+    'BTC/USD': '0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43',
+    'ETH/USD': '0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace',
+    'MOVE/USD': '0x123...', // 실제 피드 ID로 교체 필요
+    'USDC/USD': '0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a'
+  },
+  
+  testnet: {
+    'BTC/USD': '0xf9c0172ba10dfa4d19088d94f5bf61d3b54d5bd7483a322a982e1373ee8ea31b',
+    'ETH/USD': '0xca80ba6dc32e08d06f1aa886011eed1d77c77be9eb761cc10d72b7d0a2fd57a6',
+    'MOVE/USD': '0x456...', // 테스트넷 피드 ID
+    'USDC/USD': '0x41f3625971ca2ed2263e78573fe5ce23e13d2558ed3f2e47ab0f84fb9e7ae722'
+  }
+};
+```
+
+## 🔧 Movement에서 Pyth 통합
+
+### 1. Pyth 모듈 설정
+```move
+// sources/oracle_integration.move
+module my_address::oracle_integration {
+    use std::signer;
+    use std::vector;
+    use aptos_framework::timestamp;
+    use pyth::pyth;
+    use pyth::price_info::{Self, PriceInfoObject};
+    use pyth::price::{Self, Price};
+    use pyth::i64;
+
+    // Oracle 관련 상수
+    const E_STALE_PRICE: u64 = 1;
+    const E_INVALID_PRICE: u64 = 2;
+    const E_INSUFFICIENT_CONFIDENCE: u64 = 3;
+    
+    // 최대 허용 가격 나이 (초)
+    const MAX_PRICE_AGE_SECONDS: u64 = 60;
+    
+    // 최소 신뢰도 임계값 (basis points)
+    const MIN_CONFIDENCE_BPS: u64 = 100; // 1%
+
+    struct OracleManager has key {
+        price_feeds: vector<address>,
+        last_update: u64,
+        admin: address
+    }
+
+    // Oracle 초기화
+    public fun initialize(admin: &signer) {
+        let admin_addr = signer::address_of(admin);
+        
+        move_to(admin, OracleManager {
+            price_feeds: vector::empty(),
+            last_update: timestamp::now_seconds(),
+            admin: admin_addr
+        });
+    }
+
+    // 가격 피드 추가
+    public fun add_price_feed(
+        admin: &signer,
+        feed_address: address
+    ) acquires OracleManager {
+        let admin_addr = signer::address_of(admin);
+        let manager = borrow_global_mut<OracleManager>(admin_addr);
+        
+        assert!(manager.admin == admin_addr, E_INVALID_PRICE);
+        vector::push_back(&mut manager.price_feeds, feed_address);
+    }
+
+    // 가격 조회 (안전한 방식)
+    public fun get_safe_price(
+        feed_address: address,
+        max_age_seconds: u64
+    ): (u64, u64) {
+        let price_info_obj = pyth::get_price_info_object(feed_address);
+        let price_info = price_info::get_price_info(&price_info_obj);
+        let price = price_info::get_price(&price_info);
+        
+        // 가격 유효성 검증
+        validate_price_freshness(&price, max_age_seconds);
+        validate_price_confidence(&price);
+        
+        let price_value = price::get_price(&price);
+        let confidence = price::get_conf(&price);
+        
+        // i64에서 u64로 변환 (음수 가격은 에러)
+        let price_u64 = i64::get_magnitude_if_positive(&price_value);
+        assert!(i64::get_is_positive(&price_value), E_INVALID_PRICE);
+        
+        (price_u64, confidence)
+    }
+
+    // 가격 신선도 검증
+    fun validate_price_freshness(price: &Price, max_age: u64) {
+        let publish_time = price::get_timestamp(price);
+        let current_time = timestamp::now_seconds();
+        
+        assert!(
+            current_time - publish_time <= max_age,
+            E_STALE_PRICE
+        );
+    }
+
+    // 가격 신뢰도 검증
+    fun validate_price_confidence(price: &Price) {
+        let price_value = price::get_price(price);
+        let confidence = price::get_conf(price);
+        
+        let price_abs = i64::get_magnitude_if_positive(&price_value);
+        
+        // 신뢰도가 가격의 1% 이하여야 함
+        assert!(
+            confidence * 10000 <= price_abs * MIN_CONFIDENCE_BPS,
+            E_INSUFFICIENT_CONFIDENCE
+        );
+    }
+
+    // 여러 피드의 가격을 동시에 조회
+    public fun get_multiple_prices(
+        feed_addresses: vector<address>
+    ): vector<(u64, u64)> {
+        let prices = vector::empty();
+        let i = 0;
+        let len = vector::length(&feed_addresses);
+        
+        while (i < len) {
+            let feed_addr = *vector::borrow(&feed_addresses, i);
+            let (price, confidence) = get_safe_price(feed_addr, MAX_PRICE_AGE_SECONDS);
+            vector::push_back(&mut prices, (price, confidence));
+            i = i + 1;
+        };
+        
+        prices
+    }
+}
+```
+
+### 2. DeFi 프로토콜에 Oracle 활용
+```move
+// sources/defi_protocol.move
+module my_address::defi_protocol {
+    use std::signer;
+    use aptos_framework::coin::{Self, Coin};
+    use aptos_framework::aptos_coin::AptosCoin;
+    use my_address::oracle_integration;
+
+    // 담보 비율 상수 (150% = 15000 basis points)
+    const COLLATERAL_RATIO: u64 = 15000;
+    const BASIS_POINTS: u64 = 10000;
+
+    struct LendingPool has key {
+        total_deposits: u64,
+        total_borrows: u64,
+        interest_rate: u64, // basis points
+        price_feed: address
+    }
+
+    struct UserPosition has key {
+        collateral: u64,
+        debt: u64,
+        last_update: u64
+    }
+
+    // 담보 예치
+    public fun deposit_collateral(
+        user: &signer,
+        amount: Coin<AptosCoin>
+    ) acquires LendingPool, UserPosition {
+        let user_addr = signer::address_of(user);
+        let deposit_amount = coin::value(&amount);
+        
+        // 사용자 포지션 업데이트
+        if (!exists<UserPosition>(user_addr)) {
+            move_to(user, UserPosition {
+                collateral: 0,
+                debt: 0,
+                last_update: timestamp::now_seconds()
+            });
+        };
+        
+        let position = borrow_global_mut<UserPosition>(user_addr);
+        position.collateral = position.collateral + deposit_amount;
+        
+        // 풀에 자금 예치
+        coin::deposit(user_addr, amount);
+    }
+
+    // 안전한 대출 (Oracle 가격 기반)
+    public fun borrow_against_collateral(
+        user: &signer,
+        amount: u64,
+        pool_addr: address
+    ): Coin<AptosCoin> acquires LendingPool, UserPosition {
+        let user_addr = signer::address_of(user);
+        let pool = borrow_global<LendingPool>(pool_addr);
+        let position = borrow_global_mut<UserPosition>(user_addr);
+        
+        // Oracle에서 현재 가격 조회
+        let (collateral_price, _) = oracle_integration::get_safe_price(
+            pool.price_feed,
+            60 // 60초 이내 가격만 허용
+        );
+        
+        // 담보 가치 계산
+        let collateral_value = position.collateral * collateral_price;
+        
+        // 새로운 총 부채
+        let new_total_debt = position.debt + amount;
+        
+        // 담보 비율 확인 (150% 이상이어야 함)
+        assert!(
+            collateral_value * BASIS_POINTS >= new_total_debt * COLLATERAL_RATIO,
+            E_INSUFFICIENT_COLLATERAL
+        );
+        
+        // 부채 업데이트
+        position.debt = new_total_debt;
+        
+        // 대출금 인출
+        coin::withdraw<AptosCoin>(user, amount)
+    }
+
+    // 청산 함수 (담보 비율이 부족한 포지션)
+    public fun liquidate_position(
+        liquidator: &signer,
+        target_user: address,
+        pool_addr: address
+    ) acquires LendingPool, UserPosition {
+        let pool = borrow_global<LendingPool>(pool_addr);
+        let position = borrow_global_mut<UserPosition>(target_user);
+        
+        // 현재 담보 가격 조회
+        let (collateral_price, _) = oracle_integration::get_safe_price(
+            pool.price_feed,
+            60
+        );
+        
+        let collateral_value = position.collateral * collateral_price;
+        let health_ratio = collateral_value * BASIS_POINTS / position.debt;
+        
+        // 담보 비율이 130% 미만인 경우 청산 가능
+        assert!(health_ratio < 13000, E_POSITION_HEALTHY);
+        
+        // 청산 로직 구현...
+        // 담보 일부를 청산자에게 전송하고 부채 감소
+    }
+
+    // 다중 자산 포트폴리오 가치 계산
+    public fun calculate_portfolio_value(
+        user_addr: address,
+        asset_amounts: vector<u64>,
+        price_feeds: vector<address>
+    ): u64 {
+        let prices = oracle_integration::get_multiple_prices(price_feeds);
+        let total_value = 0;
+        let i = 0;
+        
+        while (i < vector::length(&asset_amounts)) {
+            let amount = *vector::borrow(&asset_amounts, i);
+            let (price, _) = *vector::borrow(&prices, i);
+            total_value = total_value + (amount * price);
+            i = i + 1;
+        };
+        
+        total_value
+    }
+}
+```
+
+## 📈 고급 Oracle 활용 패턴
+
+### 1. 가격 평활화 (TWAP - Time Weighted Average Price)
+```move
+module my_address::price_smoothing {
+    use std::vector;
+    use aptos_framework::timestamp;
+    use my_address::oracle_integration;
+
+    struct TWAPOracle has key {
+        price_history: vector<PricePoint>,
+        window_size: u64, // seconds
+        feed_address: address
+    }
+
+    struct PricePoint has store {
+        price: u64,
+        timestamp: u64,
+        confidence: u64
+    }
+
+    // TWAP Oracle 초기화
+    public fun initialize_twap(
+        admin: &signer,
+        feed_address: address,
+        window_size: u64
+    ) {
+        move_to(admin, TWAPOracle {
+            price_history: vector::empty(),
+            window_size,
+            feed_address
+        });
+    }
+
+    // 가격 업데이트
+    public fun update_price(oracle_addr: address) acquires TWAPOracle {
+        let oracle = borrow_global_mut<TWAPOracle>(oracle_addr);
+        let (price, confidence) = oracle_integration::get_safe_price(
+            oracle.feed_address,
+            30 // 30초 이내 데이터
+        );
+        
+        let current_time = timestamp::now_seconds();
+        
+        // 새 가격 포인트 추가
+        vector::push_back(&mut oracle.price_history, PricePoint {
+            price,
+            timestamp: current_time,
+            confidence
+        });
+        
+        // 오래된 데이터 제거
+        remove_old_prices(&mut oracle.price_history, current_time - oracle.window_size);
+    }
+
+    // TWAP 계산
+    public fun get_twap(oracle_addr: address): u64 acquires TWAPOracle {
+        let oracle = borrow_global<TWAPOracle>(oracle_addr);
+        let history = &oracle.price_history;
+        
+        if (vector::is_empty(history)) {
+            return 0
+        };
+        
+        let total_weighted_price = 0;
+        let total_weight = 0;
+        let i = 0;
+        let len = vector::length(history);
+        
+        while (i < len - 1) {
+            let current = vector::borrow(history, i);
+            let next = vector::borrow(history, i + 1);
+            
+            let time_weight = next.timestamp - current.timestamp;
+            total_weighted_price = total_weighted_price + (current.price * time_weight);
+            total_weight = total_weight + time_weight;
+            
+            i = i + 1;
+        };
+        
+        if (total_weight == 0) {
+            let last_point = vector::borrow(history, len - 1);
+            last_point.price
+        } else {
+            total_weighted_price / total_weight
+        }
+    }
+
+    fun remove_old_prices(history: &mut vector<PricePoint>, cutoff_time: u64) {
+        while (!vector::is_empty(history)) {
+            let oldest = vector::borrow(history, 0);
+            if (oldest.timestamp < cutoff_time) {
+                vector::remove(history, 0);
+            } else {
+                break
+            }
+        }
+    }
+}
+```
+
+### 2. 가격 알림 시스템
+```move
+module my_address::price_alerts {
+    use std::signer;
+    use std::vector;
+    use aptos_framework::event::{Self, EventHandle};
+    use aptos_framework::account;
+    use my_address::oracle_integration;
+
+    struct PriceAlert has key {
+        alerts: vector<Alert>,
+        events: EventHandle<PriceAlertEvent>
+    }
+
+    struct Alert has store {
+        user: address,
+        feed_address: address,
+        target_price: u64,
+        is_above: bool, // true for above, false for below
+        is_active: bool
+    }
+
+    struct PriceAlertEvent has drop, store {
+        user: address,
+        feed_address: address,
+        target_price: u64,
+        actual_price: u64,
+        timestamp: u64
+    }
+
+    // 알림 시스템 초기화
+    public fun initialize(admin: &signer) {
+        move_to(admin, PriceAlert {
+            alerts: vector::empty(),
+            events: account::new_event_handle<PriceAlertEvent>(admin)
+        });
+    }
+
+    // 가격 알림 설정
+    public fun set_price_alert(
+        user: &signer,
+        manager_addr: address,
+        feed_address: address,
+        target_price: u64,
+        is_above: bool
+    ) acquires PriceAlert {
+        let user_addr = signer::address_of(user);
+        let manager = borrow_global_mut<PriceAlert>(manager_addr);
+        
+        vector::push_back(&mut manager.alerts, Alert {
+            user: user_addr,
+            feed_address,
+            target_price,
+            is_above,
+            is_active: true
+        });
+    }
+
+    // 알림 확인 및 실행
+    public fun check_alerts(manager_addr: address) acquires PriceAlert {
+        let manager = borrow_global_mut<PriceAlert>(manager_addr);
+        let i = 0;
+        
+        while (i < vector::length(&manager.alerts)) {
+            let alert = vector::borrow_mut(&mut manager.alerts, i);
+            
+            if (alert.is_active) {
+                let (current_price, _) = oracle_integration::get_safe_price(
+                    alert.feed_address,
+                    60
+                );
+                
+                let should_trigger = if (alert.is_above) {
+                    current_price >= alert.target_price
+                } else {
+                    current_price <= alert.target_price
+                };
+                
+                if (should_trigger) {
+                    // 이벤트 발생
+                    event::emit_event(&mut manager.events, PriceAlertEvent {
+                        user: alert.user,
+                        feed_address: alert.feed_address,
+                        target_price: alert.target_price,
+                        actual_price: current_price,
+                        timestamp: timestamp::now_seconds()
+                    });
+                    
+                    // 알림 비활성화 (일회성)
+                    alert.is_active = false;
+                }
+            };
+            
+            i = i + 1;
+        }
+    }
+}
+```
+
+## 🛡️ Oracle 보안 고려사항
+
+### 1. 가격 조작 방지
+```move
+module my_address::oracle_security {
+    use std::vector;
+    use my_address::oracle_integration;
+
+    // 가격 급변 감지 임계값 (10% = 1000 basis points)
+    const MAX_PRICE_CHANGE_BPS: u64 = 1000;
+    const BASIS_POINTS: u64 = 10000;
+
+    struct PriceValidator has key {
+        last_validated_prices: vector<(address, u64, u64)>, // feed, price, timestamp
+        circuit_breaker_active: bool
+    }
+
+    // 가격 급변 감지
+    public fun validate_price_change(
+        validator_addr: address,
+        feed_address: address,
+        new_price: u64
+    ): bool acquires PriceValidator {
+        let validator = borrow_global_mut<PriceValidator>(validator_addr);
+        
+        // 이전 가격 찾기
+        let previous_price = find_previous_price(&validator.last_validated_prices, feed_address);
+        
+        if (previous_price == 0) {
+            // 첫 번째 가격인 경우 허용
+            return true
+        };
+        
+        // 변화율 계산
+        let price_change = if (new_price > previous_price) {
+            ((new_price - previous_price) * BASIS_POINTS) / previous_price
+        } else {
+            ((previous_price - new_price) * BASIS_POINTS) / previous_price
+        };
+        
+        // 급변 감지
+        price_change <= MAX_PRICE_CHANGE_BPS
+    }
+
+    // 다중 Oracle 가격 비교
+    public fun compare_multiple_sources(
+        feed_addresses: vector<address>,
+        deviation_threshold_bps: u64
+    ): (u64, bool) {
+        let prices = oracle_integration::get_multiple_prices(feed_addresses);
+        let sum = 0;
+        let count = vector::length(&prices);
+        
+        // 평균 가격 계산
+        let i = 0;
+        while (i < count) {
+            let (price, _) = *vector::borrow(&prices, i);
+            sum = sum + price;
+            i = i + 1;
+        };
+        let average = sum / count;
+        
+        // 편차 확인
+        let is_valid = true;
+        i = 0;
+        while (i < count && is_valid) {
+            let (price, _) = *vector::borrow(&prices, i);
+            let deviation = if (price > average) {
+                ((price - average) * BASIS_POINTS) / average
+            } else {
+                ((average - price) * BASIS_POINTS) / average
+            };
+            
+            if (deviation > deviation_threshold_bps) {
+                is_valid = false;
+            };
+            i = i + 1;
+        };
+        
+        (average, is_valid)
+    }
+
+    fun find_previous_price(
+        price_history: &vector<(address, u64, u64)>,
+        feed_address: address
+    ): u64 {
+        let i = vector::length(price_history);
+        while (i > 0) {
+            i = i - 1;
+            let (addr, price, _) = *vector::borrow(price_history, i);
+            if (addr == feed_address) {
+                return price
+            }
+        };
+        0
+    }
+}
+```
+
+### 2. 에러 처리 및 폴백 메커니즘
+```move
+module my_address::oracle_fallback {
+    use my_address::oracle_integration;
+
+    struct FallbackOracle has key {
+        primary_feeds: vector<address>,
+        fallback_feeds: vector<address>,
+        manual_price: u64,
+        manual_price_timestamp: u64,
+        emergency_mode: bool
+    }
+
+    // 계층적 가격 조회
+    public fun get_reliable_price(
+        fallback_addr: address,
+        max_age: u64
+    ): (u64, u64) acquires FallbackOracle {
+        let fallback = borrow_global<FallbackOracle>(fallback_addr);
+        
+        // 비상 모드인 경우 수동 가격 사용
+        if (fallback.emergency_mode) {
+            return (fallback.manual_price, 0)
+        };
+        
+        // 1. 기본 피드 시도
+        let (price, confidence) = try_price_feeds(&fallback.primary_feeds, max_age);
+        if (price > 0) {
+            return (price, confidence)
+        };
+        
+        // 2. 폴백 피드 시도
+        let (fallback_price, fallback_confidence) = try_price_feeds(&fallback.fallback_feeds, max_age);
+        if (fallback_price > 0) {
+            return (fallback_price, fallback_confidence)
+        };
+        
+        // 3. 수동 가격 사용 (최후 수단)
+        assert!(
+            timestamp::now_seconds() - fallback.manual_price_timestamp <= max_age * 10,
+            E_ALL_FEEDS_FAILED
+        );
+        
+        (fallback.manual_price, 0)
+    }
+
+    fun try_price_feeds(
+        feeds: &vector<address>,
+        max_age: u64
+    ): (u64, u64) {
+        let i = 0;
+        while (i < vector::length(feeds)) {
+            let feed_addr = *vector::borrow(feeds, i);
+            
+            // 각 피드를 안전하게 시도
+            let result = try_safe_price(feed_addr, max_age);
+            if (result.is_some) {
+                let (price, confidence) = result.value;
+                return (price, confidence)
+            };
+            
+            i = i + 1;
+        };
+        
+        (0, 0) // 모든 피드 실패
+    }
+
+    // 안전한 가격 조회 (에러 무시)
+    fun try_safe_price(feed_address: address, max_age: u64): Option<(u64, u64)> {
+        // Try-catch 시뮬레이션 (Move에서는 직접 지원하지 않음)
+        // 실제로는 Oracle 모듈에서 에러 대신 Option을 반환하도록 수정 필요
+        
+        // oracle_integration::try_get_safe_price(feed_address, max_age)
+        option::none() // 임시 구현
+    }
+}
+```
+
+## 🚀 실전 Oracle 활용 사례
+
+### DeFi Yield Farming 프로토콜
+```typescript
+// TypeScript SDK를 통한 Oracle 활용
+import { MovementClient } from '@movementnetwork/sdk';
+
+class YieldFarmingProtocol {
+  constructor(private client: MovementClient) {}
+  
+  async calculateAPY(poolAddress: string): Promise<number> {
+    // 1. 풀의 총 가치 계산 (Oracle 가격 사용)
+    const tokens = await this.getPoolTokens(poolAddress);
+    let totalValueUSD = 0;
+    
+    for (const token of tokens) {
+      const price = await this.getTokenPriceUSD(token.address);
+      totalValueUSD += token.balance * price;
+    }
+    
+    // 2. 리워드 토큰 가격 조회
+    const rewardTokenPrice = await this.getTokenPriceUSD(REWARD_TOKEN_ADDRESS);
+    
+    // 3. 연간 리워드 계산
+    const dailyRewards = await this.getDailyRewards(poolAddress);
+    const annualRewardsUSD = dailyRewards * rewardTokenPrice * 365;
+    
+    // 4. APY 계산
+    const apy = (annualRewardsUSD / totalValueUSD) * 100;
+    return apy;
+  }
+  
+  private async getTokenPriceUSD(tokenAddress: string): Promise<number> {
+    const priceFeeds = {
+      [BTC_TOKEN]: 'BTC/USD',
+      [ETH_TOKEN]: 'ETH/USD',
+      [MOVE_TOKEN]: 'MOVE/USD'
+    };
+    
+    const feedName = priceFeeds[tokenAddress];
+    if (!feedName) throw new Error('Price feed not found');
+    
+    // Move 계약 호출
+    const result = await this.client.view({
+      function: `${ORACLE_MODULE}::get_safe_price`,
+      arguments: [PYTH_FEEDS[feedName], 60], // 60초 max age
+      type_arguments: []
+    });
+    
+    const [price, confidence] = result as [string, string];
+    return parseInt(price) / 1e8; // 8 decimal places
+  }
+}
+```
+
+## 🔗 다음 단계
+
+Oracle 통합을 마스터했다면:
+
+**[Full Node 운영 (고급) →](/network-infrastructure/full-node-operations)**
+
+## 📚 참고 자료
+
+- [Pyth Network 공식 사이트](https://pyth.network/)
+- [Pyth Move SDK](https://docs.pyth.network/documentation/pythnet-price-feeds/movement)
+- [Oracle 보안 모범 사례](https://blog.chain.link/secure-oracle-best-practices/)
+- [Movement DeFi 예제](https://github.com/movementlabsxyz/defi-examples)
+
+---
+
+*신뢰할 수 있는 Oracle 데이터로 혁신적인 DeFi 프로토콜을 구축하세요! 🔮📈*

@@ -1,0 +1,1107 @@
+# ⚙️ Full Node 운영 (고급)
+
+Movement Network의 Full Node를 직접 설치, 운영, 최적화하는 방법을 심층적으로 알아보겠습니다. 자체 인프라 구축부터 고급 모니터링까지 전문적인 노드 운영 기법을 다룹니다.
+
+## 🎯 학습 목표
+
+이 섹션을 완료하면:
+- Movement Full Node를 완전히 설치하고 운영할 수 있습니다
+- 노드 성능을 모니터링하고 최적화할 수 있습니다
+- 네트워크 장애에 대응하고 복구할 수 있습니다
+- 프로덕션 환경에서 안정적인 노드를 운영할 수 있습니다
+
+## 🏗️ Full Node 아키텍처
+
+### Node 타입별 비교
+```
+Movement Network Node Types:
+
+🏦 Validator Node
+├── 합의 참여 (블록 생성/검증)
+├── 스테이킹 필요
+├── 높은 가동시간 요구
+└── 슬래싱 리스크
+
+💾 Full Node  
+├── 전체 블록체인 상태 저장
+├── API 서비스 제공 가능
+├── 검증만 수행 (합의 X)
+└── 스테이킹 불필요
+
+🔗 Archive Node
+├── 모든 히스토리 데이터 보관
+├── 대용량 스토리지 필요
+├── 분석/조회 특화
+└── 높은 하드웨어 요구사항
+```
+
+### Full Node 구성요소
+```
+Movement Full Node Architecture:
+
+┌─────────────────────────────────────────┐
+│              REST API                   │ ← 외부 애플리케이션
+├─────────────────────────────────────────┤
+│            JSON-RPC Server              │ ← RPC 인터페이스
+├─────────────────────────────────────────┤
+│              Move VM                    │ ← 스마트 계약 실행
+├─────────────────────────────────────────┤
+│            State Storage                │ ← 블록체인 상태
+├─────────────────────────────────────────┤
+│              Mempool                    │ ← 트랜잭션 풀
+├─────────────────────────────────────────┤
+│            P2P Network                  │ ← 네트워크 통신
+├─────────────────────────────────────────┤
+│           Consensus Engine              │ ← 블록 검증
+└─────────────────────────────────────────┘
+```
+
+## 💻 하드웨어 요구사항
+
+### 최소/권장 사양
+```yaml
+하드웨어 사양:
+
+최소 요구사항:
+  CPU: 4코어 (Intel/AMD 64-bit)
+  RAM: 16GB
+  Storage: 500GB SSD
+  Network: 100Mbps
+  OS: Ubuntu 20.04+ / CentOS 8+
+
+권장 사양:
+  CPU: 8코어+ (3.0GHz+)
+  RAM: 32GB+
+  Storage: 1TB+ NVMe SSD
+  Network: 1Gbps+
+  OS: Ubuntu 22.04 LTS
+
+프로덕션 환경:
+  CPU: 16코어+ (Intel Xeon/AMD EPYC)
+  RAM: 64GB+
+  Storage: 2TB+ NVMe SSD (RAID 1)
+  Network: 10Gbps+ (이중화)
+  OS: Ubuntu 22.04 LTS (LTS 버전)
+```
+
+### 스토리지 계획
+```bash
+# 디스크 사용량 추정 (일별)
+Movement Network Storage Growth:
+
+Mainnet:
+├── 블록 데이터: ~50GB/월
+├── 상태 데이터: ~20GB/월  
+├── 인덱스: ~10GB/월
+└── 로그: ~5GB/월
+
+Testnet:
+├── 블록 데이터: ~20GB/월
+├── 상태 데이터: ~10GB/월
+├── 인덱스: ~5GB/월
+└── 로그: ~2GB/월
+
+# 파티션 구성 예시
+/dev/sda1    100GB    /          # OS 파티션
+/dev/sdb1    2TB      /opt/movement/data  # 블록체인 데이터
+/dev/sdc1    500GB    /opt/movement/logs  # 로그 파일
+```
+
+## 🚀 Full Node 설치
+
+### 1. 시스템 준비
+```bash
+#!/bin/bash
+# system-setup.sh - 시스템 환경 준비
+
+# 시스템 업데이트
+sudo apt update && sudo apt upgrade -y
+
+# 필수 패키지 설치
+sudo apt install -y \
+    curl wget git build-essential \
+    pkg-config libssl-dev libclang-dev \
+    cmake python3 python3-pip \
+    htop iotop nethogs \
+    ufw fail2ban
+
+# Rust 설치 (Movement는 Rust 기반)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source $HOME/.cargo/env
+rustup update stable
+
+# Docker 설치 (선택사항)
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
+sudo usermod -aG docker $USER
+
+# 시스템 최적화
+echo "net.core.rmem_default = 262144" | sudo tee -a /etc/sysctl.conf
+echo "net.core.rmem_max = 16777216" | sudo tee -a /etc/sysctl.conf
+echo "net.core.wmem_default = 262144" | sudo tee -a /etc/sysctl.conf
+echo "net.core.wmem_max = 16777216" | sudo tee -a /etc/sysctl.conf
+sudo sysctl -p
+
+echo "✅ 시스템 준비 완료"
+```
+
+### 2. Movement Node 설치
+```bash
+#!/bin/bash
+# install-movement-node.sh
+
+# Movement 저장소 클론
+git clone https://github.com/movementlabsxyz/movement.git
+cd movement
+
+# 특정 버전으로 체크아웃 (안정성을 위해)
+git checkout v1.0.0  # 최신 stable 버전 사용
+
+# 빌드 (시간이 오래 걸림)
+cargo build --release --bin movement-node
+
+# 바이너리 설치 위치로 복사
+sudo cp target/release/movement-node /usr/local/bin/
+sudo chmod +x /usr/local/bin/movement-node
+
+# 설정 디렉토리 생성
+sudo mkdir -p /opt/movement/{data,logs,config}
+sudo chown -R $USER:$USER /opt/movement
+
+echo "✅ Movement Node 설치 완료"
+movement-node --version
+```
+
+### 3. 노드 설정
+```yaml
+# /opt/movement/config/node.yaml
+api:
+  enabled: true
+  address: "0.0.0.0:8080"
+  
+storage:
+  data_dir: "/opt/movement/data"
+  enable_indexer: true
+  prune_window: 150000000  # 블록 수
+  
+network:
+  listen_address: "/ip4/0.0.0.0/tcp/6180"
+  seeds:
+    - "/dns4/seed.mainnet.movementnetwork.xyz/tcp/6180/p2p/..."
+    - "/dns4/seed2.mainnet.movementnetwork.xyz/tcp/6180/p2p/..."
+  
+logging:
+  level: "info"
+  log_file: "/opt/movement/logs/node.log"
+  
+consensus:
+  sync_only: true  # Full Node (non-validator)
+  
+execution:
+  concurrency_level: 4
+  
+mempool:
+  max_capacity: 1000000
+  max_capacity_bytes: 1073741824  # 1GB
+```
+
+### 4. Systemd 서비스 설정
+```ini
+# /etc/systemd/system/movement-node.service
+[Unit]
+Description=Movement Full Node
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=movement
+Group=movement
+WorkingDirectory=/opt/movement
+ExecStart=/usr/local/bin/movement-node start --config /opt/movement/config/node.yaml
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+
+# 환경 변수
+Environment=RUST_LOG=info
+Environment=RUST_BACKTRACE=1
+
+# 보안 설정
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/movement
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+# 서비스 등록 및 시작
+sudo useradd -r -s /bin/false movement
+sudo chown -R movement:movement /opt/movement
+
+sudo systemctl daemon-reload
+sudo systemctl enable movement-node
+sudo systemctl start movement-node
+
+# 상태 확인
+sudo systemctl status movement-node
+```
+
+## 📊 모니터링 및 관리
+
+### 1. 노드 상태 모니터링
+```bash
+#!/bin/bash
+# monitor-node.sh - 노드 상태 체크 스크립트
+
+NODE_RPC="http://localhost:8080"
+LOG_FILE="/opt/movement/logs/monitor.log"
+
+function log_message() {
+    echo "[$(date)] $1" | tee -a $LOG_FILE
+}
+
+function check_node_health() {
+    # RPC 응답 확인
+    local response=$(curl -s -w "%{http_code}" -o /dev/null $NODE_RPC/health)
+    
+    if [ "$response" -eq 200 ]; then
+        log_message "✅ Node is healthy"
+        return 0
+    else
+        log_message "❌ Node health check failed (HTTP: $response)"
+        return 1
+    fi
+}
+
+function check_sync_status() {
+    local ledger_info=$(curl -s $NODE_RPC/v1 -X POST \
+        -H "Content-Type: application/json" \
+        -d '{"jsonrpc":"2.0","method":"get_ledger_info","id":1}')
+    
+    local block_height=$(echo $ledger_info | jq -r '.result.block_height')
+    local timestamp=$(echo $ledger_info | jq -r '.result.timestamp')
+    
+    log_message "📊 Current block height: $block_height"
+    log_message "⏰ Last block timestamp: $timestamp"
+    
+    # 블록 시간이 5분 이상 오래되었는지 확인
+    local current_time=$(date +%s)
+    local block_time=$(($timestamp / 1000000))  # microseconds to seconds
+    local time_diff=$(($current_time - $block_time))
+    
+    if [ $time_diff -gt 300 ]; then
+        log_message "⚠️ Node may be out of sync (${time_diff}s behind)"
+        return 1
+    else
+        log_message "✅ Node is synced"
+        return 0
+    fi
+}
+
+function check_peer_count() {
+    local peers_info=$(curl -s $NODE_RPC/v1 -X POST \
+        -H "Content-Type: application/json" \
+        -d '{"jsonrpc":"2.0","method":"get_network_peers","id":1}')
+    
+    local peer_count=$(echo $peers_info | jq -r '.result | length')
+    
+    log_message "👥 Connected peers: $peer_count"
+    
+    if [ "$peer_count" -lt 5 ]; then
+        log_message "⚠️ Low peer count: $peer_count"
+        return 1
+    else
+        return 0
+    fi
+}
+
+function check_disk_space() {
+    local data_usage=$(df -h /opt/movement/data | awk 'NR==2 {print $5}' | sed 's/%//')
+    local log_usage=$(df -h /opt/movement/logs | awk 'NR==2 {print $5}' | sed 's/%//')
+    
+    log_message "💾 Data disk usage: ${data_usage}%"
+    log_message "📝 Log disk usage: ${log_usage}%"
+    
+    if [ "$data_usage" -gt 80 ] || [ "$log_usage" -gt 80 ]; then
+        log_message "⚠️ High disk usage detected"
+        return 1
+    else
+        return 0
+    fi
+}
+
+function check_memory_usage() {
+    local mem_info=$(free -m | awk 'NR==2{printf "%.1f", $3*100/$2}')
+    log_message "🧠 Memory usage: ${mem_info}%"
+    
+    if (( $(echo "$mem_info > 90" | bc -l) )); then
+        log_message "⚠️ High memory usage: ${mem_info}%"
+        return 1
+    else
+        return 0
+    fi
+}
+
+# 메인 체크 루틴
+function main() {
+    log_message "🔍 Starting node health check..."
+    
+    local issues=0
+    
+    check_node_health || ((issues++))
+    check_sync_status || ((issues++))
+    check_peer_count || ((issues++))
+    check_disk_space || ((issues++))
+    check_memory_usage || ((issues++))
+    
+    if [ $issues -eq 0 ]; then
+        log_message "✅ All checks passed"
+    else
+        log_message "❌ Found $issues issue(s)"
+    fi
+    
+    return $issues
+}
+
+# Cron으로 주기적 실행: */5 * * * * /opt/movement/scripts/monitor-node.sh
+main
+```
+
+### 2. Prometheus + Grafana 모니터링
+```yaml
+# prometheus.yml
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: 'movement-node'
+    static_configs:
+      - targets: ['localhost:9101']  # Movement 노드 메트릭 포트
+    scrape_interval: 10s
+    metrics_path: /metrics
+
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['localhost:9100']
+```
+
+```dockerfile
+# docker-compose.yml - 모니터링 스택
+version: '3.8'
+
+services:
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node-exporter
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($|/)'
+
+volumes:
+  prometheus_data:
+  grafana_data:
+```
+
+### 3. 로그 분석 도구
+```python
+#!/usr/bin/env python3
+# log_analyzer.py - 로그 분석 스크립트
+
+import re
+import json
+from datetime import datetime
+from collections import defaultdict, Counter
+
+class MovementLogAnalyzer:
+    def __init__(self, log_file):
+        self.log_file = log_file
+        self.patterns = {
+            'error': re.compile(r'ERROR'),
+            'warning': re.compile(r'WARN'),
+            'sync': re.compile(r'synced to block (\d+)'),
+            'peer': re.compile(r'connected to peer (\w+)'),
+            'transaction': re.compile(r'processed (\d+) transactions'),
+        }
+    
+    def analyze_logs(self, hours=24):
+        """최근 N시간의 로그 분석"""
+        stats = {
+            'errors': [],
+            'warnings': [],
+            'sync_progress': [],
+            'peer_connections': Counter(),
+            'transaction_volume': [],
+            'performance_metrics': defaultdict(list)
+        }
+        
+        cutoff_time = datetime.now().timestamp() - (hours * 3600)
+        
+        with open(self.log_file, 'r') as f:
+            for line in f:
+                try:
+                    # 타임스탬프 추출
+                    timestamp_match = re.search(r'\[(.*?)\]', line)
+                    if not timestamp_match:
+                        continue
+                    
+                    log_time = datetime.fromisoformat(
+                        timestamp_match.group(1).replace('Z', '+00:00')
+                    ).timestamp()
+                    
+                    if log_time < cutoff_time:
+                        continue
+                    
+                    # 패턴 매칭
+                    if self.patterns['error'].search(line):
+                        stats['errors'].append({
+                            'time': log_time,
+                            'message': line.strip()
+                        })
+                    
+                    elif self.patterns['warning'].search(line):
+                        stats['warnings'].append({
+                            'time': log_time,
+                            'message': line.strip()
+                        })
+                    
+                    sync_match = self.patterns['sync'].search(line)
+                    if sync_match:
+                        stats['sync_progress'].append({
+                            'time': log_time,
+                            'block_height': int(sync_match.group(1))
+                        })
+                    
+                    peer_match = self.patterns['peer'].search(line)
+                    if peer_match:
+                        stats['peer_connections'][peer_match.group(1)] += 1
+                    
+                    tx_match = self.patterns['transaction'].search(line)
+                    if tx_match:
+                        stats['transaction_volume'].append({
+                            'time': log_time,
+                            'count': int(tx_match.group(1))
+                        })
+                
+                except Exception as e:
+                    continue
+        
+        return stats
+    
+    def generate_report(self, stats):
+        """분석 결과 리포트 생성"""
+        report = []
+        report.append("=" * 50)
+        report.append("Movement Node Log Analysis Report")
+        report.append("=" * 50)
+        
+        # 에러 분석
+        report.append(f"\n🚨 Errors: {len(stats['errors'])}")
+        if stats['errors']:
+            error_types = Counter()
+            for error in stats['errors'][-10:]:  # 최근 10개
+                error_types[error['message'][:100]] += 1
+                report.append(f"  - {datetime.fromtimestamp(error['time'])}: {error['message'][:100]}...")
+        
+        # 경고 분석
+        report.append(f"\n⚠️ Warnings: {len(stats['warnings'])}")
+        
+        # 동기화 진행률
+        if stats['sync_progress']:
+            latest_sync = max(stats['sync_progress'], key=lambda x: x['time'])
+            oldest_sync = min(stats['sync_progress'], key=lambda x: x['time'])
+            blocks_synced = latest_sync['block_height'] - oldest_sync['block_height']
+            time_diff = latest_sync['time'] - oldest_sync['time']
+            sync_rate = blocks_synced / (time_diff / 3600) if time_diff > 0 else 0
+            
+            report.append(f"\n📊 Sync Progress:")
+            report.append(f"  - Current block: {latest_sync['block_height']}")
+            report.append(f"  - Blocks synced: {blocks_synced}")
+            report.append(f"  - Sync rate: {sync_rate:.2f} blocks/hour")
+        
+        # 피어 연결
+        report.append(f"\n👥 Peer Connections: {len(stats['peer_connections'])}")
+        for peer, count in stats['peer_connections'].most_common(5):
+            report.append(f"  - {peer}: {count} connections")
+        
+        # 트랜잭션 처리량
+        if stats['transaction_volume']:
+            total_tx = sum(item['count'] for item in stats['transaction_volume'])
+            avg_tx = total_tx / len(stats['transaction_volume'])
+            report.append(f"\n📈 Transaction Processing:")
+            report.append(f"  - Total transactions: {total_tx}")
+            report.append(f"  - Average per batch: {avg_tx:.2f}")
+        
+        return '\n'.join(report)
+
+if __name__ == "__main__":
+    analyzer = MovementLogAnalyzer("/opt/movement/logs/node.log")
+    stats = analyzer.analyze_logs(24)  # 최근 24시간
+    report = analyzer.generate_report(stats)
+    print(report)
+    
+    # 결과를 파일로 저장
+    with open("/opt/movement/logs/analysis_report.txt", "w") as f:
+        f.write(report)
+```
+
+## 🔧 성능 최적화
+
+### 1. 시스템 레벨 최적화
+```bash
+#!/bin/bash
+# optimize-system.sh
+
+# CPU 거버너 설정 (성능 우선)
+echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
+
+# I/O 스케줄러 최적화 (SSD용)
+echo noop | sudo tee /sys/block/sd*/queue/scheduler
+
+# TCP 버퍼 크기 최적화
+sudo sysctl -w net.core.rmem_max=134217728
+sudo sysctl -w net.core.wmem_max=134217728
+sudo sysctl -w net.ipv4.tcp_rmem="4096 87380 134217728"
+sudo sysctl -w net.ipv4.tcp_wmem="4096 65536 134217728"
+
+# 파일 디스크립터 한도 증가
+echo "movement soft nofile 65535" | sudo tee -a /etc/security/limits.conf
+echo "movement hard nofile 65535" | sudo tee -a /etc/security/limits.conf
+
+# Transparent Huge Pages 비활성화 (데이터베이스 성능)
+echo never | sudo tee /sys/kernel/mm/transparent_hugepage/enabled
+
+# 스왑 사용 최소화
+sudo sysctl -w vm.swappiness=1
+```
+
+### 2. 노드 설정 최적화
+```yaml
+# /opt/movement/config/optimized-node.yaml
+api:
+  enabled: true
+  address: "0.0.0.0:8080"
+  max_connections: 1000
+  
+storage:
+  data_dir: "/opt/movement/data"
+  enable_indexer: true
+  prune_window: 100000000
+  
+  # 스토리지 최적화
+  rocksdb_config:
+    max_open_files: 10000
+    max_background_jobs: 8
+    max_bytes_for_level_base: 268435456  # 256MB
+    write_buffer_size: 134217728  # 128MB
+    target_file_size_base: 67108864  # 64MB
+    
+network:
+  listen_address: "/ip4/0.0.0.0/tcp/6180"
+  max_peers: 100
+  connection_timeout: 30
+  
+  # 네트워크 최적화
+  enable_upnp: false
+  enable_mdns: false
+  transport_timeout: 20
+  
+execution:
+  # CPU 코어 수에 맞게 조정
+  concurrency_level: 8
+  execution_threads: 6
+  
+mempool:
+  max_capacity: 5000000
+  max_capacity_bytes: 2147483648  # 2GB
+  
+logging:
+  level: "warn"  # 프로덕션에서는 warn 레벨 사용
+  async_logging: true
+```
+
+### 3. 데이터베이스 최적화
+```bash
+#!/bin/bash
+# optimize-database.sh
+
+# RocksDB 압축 최적화
+movement-node db compact --data-dir /opt/movement/data
+
+# 불필요한 인덱스 정리
+movement-node db prune --data-dir /opt/movement/data --keep-blocks 1000000
+
+# 데이터베이스 통계 업데이트
+movement-node db stats --data-dir /opt/movement/data
+```
+
+## 🛡️ 보안 강화
+
+### 1. 방화벽 설정
+```bash
+#!/bin/bash
+# setup-firewall.sh
+
+# UFW 초기화
+sudo ufw --force reset
+
+# 기본 정책
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+
+# SSH 접근 (특정 IP만 허용)
+sudo ufw allow from YOUR_MANAGEMENT_IP to any port 22
+
+# Movement Node P2P 포트
+sudo ufw allow 6180/tcp
+
+# API 포트 (신뢰할 수 있는 IP만)
+sudo ufw allow from YOUR_APP_SERVER_IP to any port 8080
+
+# 모니터링 포트 (로컬만)
+sudo ufw allow from 127.0.0.1 to any port 9100
+sudo ufw allow from 127.0.0.1 to any port 9101
+
+# Fail2ban 설정
+sudo systemctl enable fail2ban
+sudo systemctl start fail2ban
+
+# UFW 활성화
+sudo ufw --force enable
+```
+
+### 2. SSL/TLS 설정
+```bash
+#!/bin/bash
+# setup-ssl.sh
+
+# Let's Encrypt 인증서 설치
+sudo apt install certbot -y
+
+# 인증서 발급
+sudo certbot certonly --standalone \
+    -d node.yourdomain.com \
+    --email your-email@domain.com \
+    --agree-tos --non-interactive
+
+# Nginx 리버스 프록시 설정
+sudo apt install nginx -y
+
+cat <<EOF | sudo tee /etc/nginx/sites-available/movement-node
+server {
+    listen 443 ssl http2;
+    server_name node.yourdomain.com;
+    
+    ssl_certificate /etc/letsencrypt/live/node.yourdomain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/node.yourdomain.com/privkey.pem;
+    
+    # SSL 설정
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-RSA-AES256-GCM-SHA512:DHE-RSA-AES256-GCM-SHA512:ECDHE-RSA-AES256-GCM-SHA384;
+    ssl_prefer_server_ciphers off;
+    
+    # Rate limiting
+    limit_req_zone \$binary_remote_addr zone=api:10m rate=10r/s;
+    
+    location / {
+        limit_req zone=api burst=20 nodelay;
+        
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        
+        # WebSocket 지원
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+
+server {
+    listen 80;
+    server_name node.yourdomain.com;
+    return 301 https://\$server_name\$request_uri;
+}
+EOF
+
+sudo ln -s /etc/nginx/sites-available/movement-node /etc/nginx/sites-enabled/
+sudo systemctl enable nginx
+sudo systemctl restart nginx
+```
+
+## 🔄 백업 및 복구
+
+### 1. 자동 백업 시스템
+```bash
+#!/bin/bash
+# backup-node.sh
+
+BACKUP_DIR="/opt/backups/movement"
+DATA_DIR="/opt/movement/data"
+CONFIG_DIR="/opt/movement/config"
+RETENTION_DAYS=7
+
+# 백업 디렉토리 생성
+mkdir -p $BACKUP_DIR
+
+# 현재 날짜로 백업 폴더 생성
+BACKUP_DATE=$(date +%Y%m%d_%H%M%S)
+CURRENT_BACKUP="$BACKUP_DIR/backup_$BACKUP_DATE"
+mkdir -p $CURRENT_BACKUP
+
+# 노드 일시 정지 (선택사항 - 데이터 일관성을 위해)
+# sudo systemctl stop movement-node
+
+# 데이터 백업 (압축)
+echo "Backing up blockchain data..."
+tar -czf "$CURRENT_BACKUP/blockchain_data.tar.gz" -C $DATA_DIR .
+
+# 설정 파일 백업
+echo "Backing up configuration..."
+cp -r $CONFIG_DIR "$CURRENT_BACKUP/config"
+
+# 로그 백업 (최근 1주일)
+echo "Backing up recent logs..."
+find /opt/movement/logs -name "*.log" -mtime -7 -exec cp {} "$CURRENT_BACKUP/" \;
+
+# 노드 재시작
+# sudo systemctl start movement-node
+
+# 백업 정보 기록
+cat <<EOF > "$CURRENT_BACKUP/backup_info.txt"
+Backup Date: $(date)
+Node Version: $(movement-node --version)
+Blockchain Height: $(curl -s http://localhost:8080/v1 -X POST -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"get_ledger_info","id":1}' | jq -r '.result.block_height')
+Data Size: $(du -sh $DATA_DIR | cut -f1)
+EOF
+
+# 오래된 백업 삭제
+find $BACKUP_DIR -type d -name "backup_*" -mtime +$RETENTION_DAYS -exec rm -rf {} +
+
+# S3 업로드 (선택사항)
+if command -v aws &> /dev/null; then
+    echo "Uploading to S3..."
+    aws s3 sync $CURRENT_BACKUP s3://your-bucket/movement-backups/backup_$BACKUP_DATE/
+fi
+
+echo "Backup completed: $CURRENT_BACKUP"
+```
+
+### 2. 재해 복구 프로세스
+```bash
+#!/bin/bash
+# disaster-recovery.sh
+
+BACKUP_DIR="/opt/backups/movement"
+DATA_DIR="/opt/movement/data"
+CONFIG_DIR="/opt/movement/config"
+
+function restore_from_backup() {
+    local backup_path=$1
+    
+    if [ ! -d "$backup_path" ]; then
+        echo "❌ Backup not found: $backup_path"
+        exit 1
+    fi
+    
+    echo "🚨 Starting disaster recovery..."
+    
+    # 노드 중지
+    sudo systemctl stop movement-node
+    
+    # 기존 데이터 백업 (안전을 위해)
+    if [ -d "$DATA_DIR" ]; then
+        mv "$DATA_DIR" "${DATA_DIR}.pre_recovery_$(date +%s)"
+    fi
+    
+    # 데이터 복구
+    echo "📁 Restoring blockchain data..."
+    mkdir -p $DATA_DIR
+    tar -xzf "$backup_path/blockchain_data.tar.gz" -C $DATA_DIR
+    
+    # 설정 복구
+    echo "⚙️ Restoring configuration..."
+    cp -r "$backup_path/config/"* $CONFIG_DIR/
+    
+    # 권한 설정
+    sudo chown -R movement:movement /opt/movement
+    
+    # 노드 시작
+    echo "🚀 Starting node..."
+    sudo systemctl start movement-node
+    
+    # 상태 확인
+    sleep 10
+    if sudo systemctl is-active --quiet movement-node; then
+        echo "✅ Recovery completed successfully"
+        
+        # 동기화 상태 확인
+        local sync_status=$(curl -s http://localhost:8080/health)
+        echo "🔄 Sync status: $sync_status"
+    else
+        echo "❌ Recovery failed - node is not running"
+        exit 1
+    fi
+}
+
+# 사용법
+if [ $# -eq 0 ]; then
+    echo "Usage: $0 <backup_directory>"
+    echo "Available backups:"
+    ls -la $BACKUP_DIR/backup_*/ 2>/dev/null | head -10
+    exit 1
+fi
+
+restore_from_backup $1
+```
+
+## 📈 운영 베스트 프랙티스
+
+### 1. 일일 운영 체크리스트
+```bash
+#!/bin/bash
+# daily-checklist.sh
+
+echo "📋 Movement Node Daily Checklist"
+echo "================================"
+
+# 1. 서비스 상태
+if systemctl is-active --quiet movement-node; then
+    echo "✅ Node service is running"
+else
+    echo "❌ Node service is down"
+fi
+
+# 2. 동기화 상태
+sync_check=$(curl -s http://localhost:8080/health)
+if [[ $sync_check == *"healthy"* ]]; then
+    echo "✅ Node is healthy and synced"
+else
+    echo "⚠️ Node sync issue detected"
+fi
+
+# 3. 디스크 사용량
+data_usage=$(df -h /opt/movement/data | awk 'NR==2 {print $5}')
+echo "💾 Data disk usage: $data_usage"
+
+# 4. 메모리 사용량
+mem_usage=$(free -m | awk 'NR==2{printf "%.1f%%", $3*100/$2}')
+echo "🧠 Memory usage: $mem_usage"
+
+# 5. 로그 에러 확인
+error_count=$(tail -1000 /opt/movement/logs/node.log | grep -c ERROR)
+echo "🚨 Recent errors: $error_count"
+
+# 6. 피어 연결 수
+peer_count=$(curl -s http://localhost:8080/v1 -X POST -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"get_network_peers","id":1}' | jq -r '.result | length')
+echo "👥 Connected peers: $peer_count"
+
+# 7. 백업 상태
+last_backup=$(ls -t /opt/backups/movement/backup_* 2>/dev/null | head -1)
+if [ -n "$last_backup" ]; then
+    backup_age=$(( ($(date +%s) - $(stat -c %Y "$last_backup")) / 3600 ))
+    echo "💼 Last backup: ${backup_age}h ago"
+else
+    echo "❌ No recent backup found"
+fi
+
+echo "================================"
+echo "✅ Daily check completed"
+```
+
+### 2. 알림 시스템
+```python
+#!/usr/bin/env python3
+# alert-system.py
+
+import requests
+import json
+import subprocess
+import time
+from datetime import datetime
+
+class MovementNodeAlerts:
+    def __init__(self, webhook_url=None, email=None):
+        self.webhook_url = webhook_url  # Slack/Discord webhook
+        self.email = email
+        self.node_url = "http://localhost:8080"
+        
+    def send_alert(self, message, level="warning"):
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        alert_msg = f"[{level.upper()}] {timestamp}: {message}"
+        
+        print(alert_msg)
+        
+        # Slack/Discord 알림
+        if self.webhook_url:
+            payload = {
+                "text": f"🚨 Movement Node Alert",
+                "attachments": [{
+                    "color": "danger" if level == "critical" else "warning",
+                    "text": alert_msg
+                }]
+            }
+            try:
+                requests.post(self.webhook_url, json=payload, timeout=10)
+            except Exception as e:
+                print(f"Failed to send webhook alert: {e}")
+        
+        # 이메일 알림 (sendmail 사용)
+        if self.email and level == "critical":
+            try:
+                subprocess.run([
+                    "mail", "-s", f"Movement Node Alert - {level}",
+                    self.email
+                ], input=alert_msg.encode(), timeout=30)
+            except Exception as e:
+                print(f"Failed to send email alert: {e}")
+    
+    def check_node_health(self):
+        try:
+            response = requests.get(f"{self.node_url}/health", timeout=10)
+            if response.status_code != 200:
+                self.send_alert(
+                    f"Node health check failed: HTTP {response.status_code}",
+                    "critical"
+                )
+                return False
+            return True
+        except Exception as e:
+            self.send_alert(f"Cannot connect to node: {e}", "critical")
+            return False
+    
+    def check_sync_status(self):
+        try:
+            response = requests.post(
+                f"{self.node_url}/v1",
+                json={"jsonrpc":"2.0","method":"get_ledger_info","id":1},
+                timeout=10
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                timestamp = int(data['result']['timestamp']) // 1000000
+                current_time = int(time.time())
+                lag = current_time - timestamp
+                
+                if lag > 300:  # 5분 이상 지연
+                    self.send_alert(
+                        f"Node is {lag}s behind network",
+                        "warning"
+                    )
+                    return False
+            return True
+        except Exception as e:
+            self.send_alert(f"Sync status check failed: {e}", "warning")
+            return False
+    
+    def check_disk_space(self):
+        try:
+            result = subprocess.run(
+                ["df", "-h", "/opt/movement/data"],
+                capture_output=True, text=True, timeout=10
+            )
+            
+            usage_line = result.stdout.split('\n')[1]
+            usage_pct = int(usage_line.split()[4].rstrip('%'))
+            
+            if usage_pct > 90:
+                self.send_alert(
+                    f"Critical disk usage: {usage_pct}%",
+                    "critical"
+                )
+                return False
+            elif usage_pct > 80:
+                self.send_alert(
+                    f"High disk usage: {usage_pct}%",
+                    "warning"
+                )
+            return True
+        except Exception as e:
+            self.send_alert(f"Disk space check failed: {e}", "warning")
+            return False
+    
+    def run_all_checks(self):
+        """모든 체크를 실행"""
+        checks = [
+            ("Health", self.check_node_health),
+            ("Sync", self.check_sync_status),
+            ("Disk", self.check_disk_space)
+        ]
+        
+        failed_checks = []
+        for name, check_func in checks:
+            if not check_func():
+                failed_checks.append(name)
+        
+        if not failed_checks:
+            print("✅ All checks passed")
+        else:
+            print(f"❌ Failed checks: {', '.join(failed_checks)}")
+
+if __name__ == "__main__":
+    # 설정 (실제 값으로 변경)
+    alerts = MovementNodeAlerts(
+        webhook_url="https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK",
+        email="admin@yourdomain.com"
+    )
+    
+    alerts.run_all_checks()
+```
+
+## 🔗 다음 단계
+
+Full Node 운영을 마스터했다면, **network-infrastructure 섹션을 완료하신 겁니다!** 🎉
+
+이제 다른 고급 주제들을 탐험해보세요:
+- **[고급 개념 (Advanced Concepts)](/advanced-concepts)**
+- **[dApp 개발 (dApp Development)](/dapp-development)**
+
+## 📚 참고 자료
+
+- [Movement 개발자 포털](https://developer.movementnetwork.xyz/)
+- [Movement 공식 문서](https://docs.movementnetwork.xyz/)
+- [Movement GitHub](https://github.com/movementlabsxyz)
+- [노드 운영 가이드](https://docs.movementnetwork.xyz/nodes)
+
+---
+
+*안정적이고 고성능인 Movement Full Node로 네트워크에 기여하세요! ⚙️🚀*

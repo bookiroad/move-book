@@ -1,0 +1,469 @@
+# 🌐 네트워크 개요 (Mainnet, Testnet, Devnet)
+
+Movement Network의 다양한 네트워크 환경을 이해하고 개발 단계에 맞는 적절한 네트워크를 선택하는 방법을 알아보겠습니다.
+
+## 🎯 학습 목표
+
+이 섹션을 완료하면:
+- Movement의 각 네트워크 환경의 특징을 이해할 수 있습니다
+- 개발 단계에 따른 적절한 네트워크를 선택할 수 있습니다
+- 네트워크 간 전환 방법을 숙지할 수 있습니다
+- 각 네트워크의 제약사항과 활용법을 파악할 수 있습니다
+
+## 🌍 Movement 네트워크 생태계
+
+### 전체 네트워크 구조
+```
+Movement Network Ecosystem
+
+🏭 Production Environment
+├── Mainnet
+│   ├── 실제 MOVE 토큰 사용
+│   ├── 높은 보안 및 안정성
+│   ├── 영구적 데이터 저장
+│   └── 실제 경제적 가치
+
+🧪 Development Environments  
+├── Bardock Testnet
+│   ├── 메인넷과 동일한 기능
+│   ├── 무료 테스트 토큰
+│   ├── 안정적인 테스트 환경
+│   └── 프로덕션 준비 테스트
+│
+└── Suzuka Devnet
+    ├── 최신 실험적 기능
+    ├── 빠른 블록 생성
+    ├── 개발자 친화적 설정
+    └── 프로토타입 및 실험용
+```
+
+## 🏭 Mainnet - 프로덕션 환경
+
+### 기본 정보
+```yaml
+네트워크 이름: Movement Mainnet
+체인 ID: 126
+블록 시간: ~2초
+합의 메커니즘: DiemBFT
+네이티브 토큰: MOVE
+```
+
+### 주요 엔드포인트
+```bash
+# RPC Endpoint
+https://mainnet.movementnetwork.xyz/v1
+
+# WebSocket
+wss://mainnet.movementnetwork.xyz/ws
+
+# Explorer
+https://explorer.movementnetwork.xyz/?network=mainnet
+
+# REST API
+https://mainnet.movementnetwork.xyz/v1
+```
+
+### 메인넷 특징
+- ✅ **실제 토큰**: 진짜 경제적 가치가 있는 MOVE 토큰
+- ✅ **최고 보안**: 다수의 검증자가 참여하는 안전한 네트워크
+- ✅ **영구 저장**: 모든 데이터가 영구적으로 보존
+- ✅ **높은 안정성**: 24/7 안정적인 서비스 제공
+- ⚠️ **높은 비용**: 실제 가스비 지불 필요
+- ⚠️ **신중한 배포**: 버그나 실수 시 실제 손실 발생
+
+### 메인넷 사용 시나리오
+```typescript
+// 메인넷 설정 예시
+const MAINNET_CONFIG = {
+  network: 'mainnet',
+  nodeUrl: 'https://mainnet.movementnetwork.xyz/v1',
+  chainId: 126,
+  currency: {
+    name: 'MOVE',
+    symbol: 'MOVE',
+    decimals: 8
+  }
+};
+
+// 프로덕션 환경에서 사용
+export const productionClient = new MovementClient(MAINNET_CONFIG);
+```
+
+## 🧪 Bardock Testnet - 테스트 환경
+
+### 기본 정보
+```yaml
+네트워크 이름: Bardock Testnet  
+체인 ID: 177
+블록 시간: ~2초
+합의 메커니즘: DiemBFT
+테스트 토큰: MOVE (무료)
+```
+
+### 주요 엔드포인트
+```bash
+# RPC Endpoint
+https://testnet.bardock.movementnetwork.xyz/v1
+
+# Faucet (무료 토큰)
+https://faucet.movementnetwork.xyz/
+
+# Explorer  
+https://explorer.movementnetwork.xyz/?network=bardock+testnet
+
+# WebSocket
+wss://testnet.bardock.movementnetwork.xyz/ws
+```
+
+### 테스트넷 특징
+- ✅ **무료 토큰**: Faucet에서 무제한 테스트 토큰 제공
+- ✅ **메인넷 동일**: 메인넷과 동일한 기능과 성능
+- ✅ **안정적**: 일정한 성능과 가용성 보장
+- ✅ **안전한 테스트**: 실제 손실 없이 모든 기능 테스트 가능
+- ⚠️ **테스트 전용**: 경제적 가치 없음
+- ⚠️ **주기적 리셋**: 때때로 네트워크 상태 초기화
+
+### 테스트넷 사용법
+```bash
+# CLI로 테스트넷 설정
+movement config set-network testnet
+
+# 테스트 계정 생성
+movement account create --account-name test-account
+
+# Faucet에서 토큰 받기
+movement account fund --account-name test-account
+
+# 계약 배포 (무료)
+movement move publish --account-name test-account
+```
+
+### 테스트넷 활용 시나리오
+```typescript
+// 테스트넷 설정
+const TESTNET_CONFIG = {
+  network: 'testnet',
+  nodeUrl: 'https://testnet.bardock.movementnetwork.xyz/v1',
+  faucetUrl: 'https://faucet.movementnetwork.xyz/',
+  chainId: 177
+};
+
+// 개발 및 테스트 환경
+export const testClient = new MovementClient(TESTNET_CONFIG);
+
+// 자동 테스트 스위트
+async function runIntegrationTests() {
+  // 1. 테스트 계정 생성
+  const testAccount = await createTestAccount();
+  
+  // 2. Faucet에서 토큰 받기
+  await fundAccount(testAccount.address());
+  
+  // 3. 계약 배포 및 테스트
+  await deployAndTestContract(testAccount);
+}
+```
+
+## 🔬 Suzuka Devnet - 개발 환경
+
+### 기본 정보
+```yaml
+네트워크 이름: Suzuka Devnet
+체인 ID: 4
+블록 시간: ~1초 (빠름)
+합의 메커니즘: DiemBFT (개발 최적화)
+테스트 토큰: MOVE (무료, 대량)
+```
+
+### 주요 엔드포인트
+```bash
+# RPC Endpoint
+https://devnet.suzuka.movementnetwork.xyz/v1
+
+# Faucet (대량 토큰)
+https://faucet.devnet.suzuka.movementnetwork.xyz/
+
+# Explorer
+https://explorer.movementnetwork.xyz/?network=suzuka+devnet
+
+# GraphQL
+https://indexer.devnet.suzuka.movementnetwork.xyz/v1/graphql
+```
+
+### 개발넷 특징
+- ✅ **빠른 개발**: 1초 블록 시간으로 빠른 피드백
+- ✅ **최신 기능**: 실험적이고 최신 기능들 테스트 가능
+- ✅ **대량 토큰**: Faucet에서 많은 양의 테스트 토큰 제공
+- ✅ **개발자 친화**: 개발에 최적화된 설정
+- ⚠️ **불안정할 수 있음**: 실험적 기능으로 인한 불안정성
+- ⚠️ **데이터 휘발성**: 자주 초기화되거나 변경될 수 있음
+
+### 개발넷 사용법
+```bash
+# 개발넷으로 전환
+movement config set-network devnet
+
+# 개발 계정 생성 (여러 개)
+movement account create --account-name dev-alice
+movement account create --account-name dev-bob
+
+# 대량 토큰 요청
+movement account fund --account-name dev-alice --amount 1000000
+
+# 빠른 프로토타이핑
+movement move init quick-prototype
+movement move publish --account-name dev-alice
+```
+
+## 📊 네트워크 비교표
+
+### 상세 비교
+```
+┌────────────────┬──────────┬─────────────┬─────────────┐
+│      특성      │ Mainnet  │   Testnet   │   Devnet    │
+├────────────────┼──────────┼─────────────┼─────────────┤
+│    체인 ID     │   126    │     177     │      4      │
+│   블록 시간    │   2초    │     2초     │     1초     │
+│   토큰 비용    │   실제   │    무료     │    무료     │
+│   네트워크     │   최고   │    높음     │    보통     │
+│   안정성       │          │             │             │
+│   데이터 지속  │   영구   │    장기     │    단기     │
+│   기능 완성도  │   안정   │    안정     │    실험     │
+│   Faucet      │   없음   │  100 MOVE   │ 1000 MOVE   │
+│   용도        │ 프로덕션  │    테스트    │    개발     │
+└────────────────┴──────────┴─────────────┴─────────────┘
+```
+
+### 성능 메트릭
+```typescript
+interface NetworkMetrics {
+  tps: number;           // 초당 트랜잭션 수
+  latency: number;       // 평균 지연시간 (ms)
+  finality: string;      // 완결성
+  uptime: number;        // 가동시간 (%)
+}
+
+const NETWORK_PERFORMANCE: Record<string, NetworkMetrics> = {
+  mainnet: {
+    tps: 10000,
+    latency: 100,
+    finality: 'instant',
+    uptime: 99.9
+  },
+  testnet: {
+    tps: 8000,
+    latency: 120,
+    finality: 'instant', 
+    uptime: 99.5
+  },
+  devnet: {
+    tps: 15000,
+    latency: 50,
+    finality: 'instant',
+    uptime: 98.0
+  }
+};
+```
+
+## 🔄 네트워크 전환 방법
+
+### CLI를 통한 전환
+```bash
+# 현재 네트워크 확인
+movement config show
+
+# 메인넷으로 전환
+movement config set-network mainnet
+
+# 테스트넷으로 전환  
+movement config set-network testnet
+
+# 개발넷으로 전환
+movement config set-network devnet
+
+# 커스텀 네트워크 설정
+movement config set-network-url https://custom.rpc.url/v1
+```
+
+### SDK를 통한 전환
+```typescript
+// React 앱에서 네트워크 전환
+export const useNetworkSwitcher = () => {
+  const [currentNetwork, setCurrentNetwork] = useState('testnet');
+  
+  const switchNetwork = async (network: 'mainnet' | 'testnet' | 'devnet') => {
+    const config = getNetworkConfig(network);
+    await client.switchNetwork(config);
+    setCurrentNetwork(network);
+  };
+  
+  return { currentNetwork, switchNetwork };
+};
+
+// 네트워크별 설정
+function getNetworkConfig(network: string) {
+  const configs = {
+    mainnet: {
+      nodeUrl: 'https://mainnet.movementnetwork.xyz/v1',
+      chainId: 126
+    },
+    testnet: {
+      nodeUrl: 'https://testnet.bardock.movementnetwork.xyz/v1', 
+      chainId: 177
+    },
+    devnet: {
+      nodeUrl: 'https://devnet.suzuka.movementnetwork.xyz/v1',
+      chainId: 4
+    }
+  };
+  
+  return configs[network];
+}
+```
+
+### 지갑에서 네트워크 전환
+```javascript
+// MetaMask 스타일 네트워크 추가
+async function addMovementNetwork(networkType) {
+  const networkConfigs = {
+    mainnet: {
+      chainId: '0x7E', // 126 in hex
+      chainName: 'Movement Mainnet',
+      rpcUrls: ['https://mainnet.movementnetwork.xyz/v1'],
+      blockExplorerUrls: ['https://explorer.movementnetwork.xyz']
+    },
+    testnet: {
+      chainId: '0xB1', // 177 in hex  
+      chainName: 'Movement Bardock Testnet',
+      rpcUrls: ['https://testnet.bardock.movementnetwork.xyz/v1'],
+      blockExplorerUrls: ['https://explorer.movementnetwork.xyz']
+    }
+  };
+  
+  await window.movement.request({
+    method: 'wallet_addEthereumChain',
+    params: [networkConfigs[networkType]]
+  });
+}
+```
+
+## 🎯 개발 단계별 네트워크 선택 가이드
+
+### 1. 초기 개발 단계 → Devnet
+```
+적합한 상황:
+✅ 새로운 아이디어 프로토타이핑
+✅ Move 언어 학습 및 실험
+✅ 빠른 반복 개발
+✅ 기본 기능 구현 및 테스트
+
+사용 팁:
+💡 자주 초기화되므로 중요한 데이터는 별도 백업
+💡 빠른 블록 시간을 활용한 신속한 개발
+💡 대량의 테스트 토큰으로 다양한 시나리오 테스트
+```
+
+### 2. 기능 개발 단계 → Testnet
+```
+적합한 상황:
+✅ 완성된 기능의 통합 테스트
+✅ 프론트엔드와 백엔드 연동
+✅ 사용자 인수 테스트 (UAT)
+✅ 성능 및 보안 테스트
+
+사용 팁:
+💡 메인넷과 동일한 환경에서 실전 테스트
+💡 다양한 사용자 시나리오 검증
+💡 부하 테스트 및 스트레스 테스트
+```
+
+### 3. 프로덕션 준비 → Mainnet
+```
+적합한 상황:
+✅ 모든 테스트가 완료된 상태
+✅ 보안 감사 완료
+✅ 실제 사용자 서비스 시작
+✅ 경제적 가치가 있는 기능
+
+사용 팁:
+💡 충분한 가스비 준비
+💡 비상 계획 및 모니터링 시스템 구축
+💡 단계적 롤아웃 고려
+```
+
+## 🛠️ 실전 워크플로우 예시
+
+### 개발 생명주기
+```bash
+#!/bin/bash
+# 전체 개발 사이클 스크립트
+
+echo "=== Movement dApp 개발 사이클 ==="
+
+# 1. 개발넷에서 프로토타입
+echo "1. 개발넷에서 프로토타입 개발..."
+movement config set-network devnet
+movement account fund --account-name prototype-account
+movement move publish --account-name prototype-account
+
+# 2. 테스트넷에서 통합 테스트
+echo "2. 테스트넷에서 통합 테스트..."
+movement config set-network testnet
+movement account fund --account-name test-account
+movement move publish --account-name test-account
+npm run test:integration
+
+# 3. 메인넷 배포 준비
+echo "3. 메인넷 배포 준비..."
+movement config set-network mainnet
+echo "⚠️ 실제 토큰 필요 - 신중하게 진행하세요"
+# movement move publish --account-name prod-account
+```
+
+### 다중 환경 관리
+```typescript
+// 환경별 설정 관리
+export class MultiNetworkManager {
+  private configs = {
+    development: {
+      network: 'devnet',
+      rpc: 'https://devnet.suzuka.movementnetwork.xyz/v1',
+      accounts: ['dev-alice', 'dev-bob']
+    },
+    testing: {
+      network: 'testnet', 
+      rpc: 'https://testnet.bardock.movementnetwork.xyz/v1',
+      accounts: ['test-deployer', 'test-user']
+    },
+    production: {
+      network: 'mainnet',
+      rpc: 'https://mainnet.movementnetwork.xyz/v1',
+      accounts: ['prod-deployer']
+    }
+  };
+  
+  async deployToAllEnvironments(contract: string) {
+    for (const [env, config] of Object.entries(this.configs)) {
+      console.log(`Deploying to ${env}...`);
+      await this.deployToNetwork(contract, config);
+    }
+  }
+}
+```
+
+## 🔗 다음 단계
+
+네트워크 개요를 이해했다면:
+
+**[RPC & Indexer 엔드포인트 →](/network-infrastructure/rpc-indexer)**
+
+## 📚 참고 자료
+
+- [Movement 개발자 포털](https://developer.movementnetwork.xyz/)
+- [Movement 공식 문서](https://docs.movementnetwork.xyz/)
+- [Movement Explorer](https://explorer.movementnetwork.xyz/)
+- [Bardock Testnet Faucet](https://faucet.movementnetwork.xyz/)
+
+---
+
+*적절한 네트워크 선택으로 효율적인 개발 워크플로우를 구축하세요! 🌐🚀*

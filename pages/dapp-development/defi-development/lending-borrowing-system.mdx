@@ -1,0 +1,1235 @@
+# 🏦 Lending & Borrowing 시스템
+
+Movement Network에서 담보 기반 대출 및 차용 프로토콜을 구축하는 완전한 가이드입니다. 동적 이자율 모델부터 청산 메커니즘까지, 안전하고 효율적인 금융 서비스를 만들어봅니다.
+
+## 🎯 학습 목표
+
+이 섹션을 완료하면:
+- 담보 기반 대출 프로토콜을 구현할 수 있습니다
+- 동적 이자율 모델을 설계할 수 있습니다
+- 청산 메커니즘과 인센티브를 구축할 수 있습니다
+- 리스크 관리 시스템을 개발할 수 있습니다
+- 플래시 론과 고급 대출 기능을 구현할 수 있습니다
+
+## 💰 담보 기반 대출 프로토콜
+
+### 종합 대출 플랫폼 아키텍처
+```move
+module lending_protocol::comprehensive_lending {
+    use std::signer;
+    use std::string::{Self, String};
+    use std::vector;
+    use std::option::{Self, Option};
+    use aptos_framework::fungible_asset::{Self, FungibleAsset, Metadata};
+    use aptos_framework::primary_fungible_store;
+    use aptos_framework::object::{Self, Object};
+    use aptos_framework::timestamp;
+    use aptos_framework::event::{Self, EventHandle};
+    use aptos_std::smart_table::{Self, SmartTable};
+    use aptos_std::math64;
+    
+    /// 종합 대출 플랫폼
+    struct LendingPlatform has key {
+        // 플랫폼 정보
+        admin: address,
+        platform_name: String,
+        
+        // 지원 자산 및 풀
+        supported_assets: SmartTable<Object<Metadata>, AssetConfig>,
+        lending_pools: SmartTable<Object<Metadata>, LendingPool>,
+        
+        // 사용자 포지션
+        user_positions: SmartTable<address, UserPosition>,
+        
+        // 오라클 및 가격 피드
+        price_oracles: SmartTable<Object<Metadata>, PriceOracle>,
+        
+        // 리스크 관리
+        global_risk_params: GlobalRiskParameters,
+        
+        // 프로토콜 설정
+        protocol_fee_rate: u64,        // basis points
+        liquidation_incentive: u64,    // basis points
+        close_factor: u64,            // 한 번에 청산 가능한 비율 (basis points)
+        
+        // 통계
+        total_supplied: u64,
+        total_borrowed: u64,
+        total_reserves: u64,
+        
+        // 이벤트
+        lending_events: EventHandle<LendingEvent>,
+        
+        // 고급 기능
+        flash_loan_enabled: bool,
+        flash_loan_fee: u64,          // basis points
+        
+        // 거버넌스
+        governance_token: Option<Object<Metadata>>,
+        
+        created_at: u64,
+        last_updated: u64
+    }
+    
+    /// 자산 설정
+    struct AssetConfig has store, drop, copy {
+        asset: Object<Metadata>,
+        is_supported: bool,
+        
+        // 담보 관련
+        collateral_factor: u64,       // LTV (basis points)
+        liquidation_threshold: u64,   // 청산 임계값 (basis points)
+        liquidation_bonus: u64,       // 청산자 보너스 (basis points)
+        
+        // 공급 제한
+        supply_cap: Option<u64>,      // 최대 공급량
+        borrow_cap: Option<u64>,      // 최대 차용량
+        
+        // 이자율 모델
+        interest_rate_model: InterestRateModel,
+        
+        // 수수료 및 준비금
+        reserve_factor: u64,          // 준비금 비율 (basis points)
+        
+        // 자산별 리스크 가중치
+        risk_weight: u64,
+        
+        created_at: u64,
+        updated_at: u64
+    }
+    
+    /// 이자율 모델
+    struct InterestRateModel has store, drop, copy {
+        model_type: u8,               // 0: linear, 1: kinked, 2: jump
+        
+        // 기본 매개변수
+        base_rate: u64,               // 기본 이자율 (basis points per year)
+        multiplier: u64,              // 기울기 (basis points per year per utilization)
+        
+        // Jump 모델용 (고활용률)
+        jump_multiplier: Option<u64>, // 고활용률 기울기
+        kink: Option<u64>,            // 전환점 활용률 (basis points)
+        
+        // 동적 조정
+        adaptive_enabled: bool,
+        adjustment_factor: u64,       // 조정 계수
+        
+        last_updated: u64
+    }
+    
+    /// 대출 풀
+    struct LendingPool has store, drop, copy {
+        asset: Object<Metadata>,
+        
+        // 자산 보유량
+        total_cash: u64,              // 사용 가능한 현금
+        total_borrows: u64,           // 총 차용량
+        total_reserves: u64,          // 프로토콜 준비금
+        
+        // 이자 누적
+        borrow_index: u128,           // 차용 이자 누적 인덱스
+        supply_index: u128,           // 공급 이자 누적 인덱스
+        
+        // 현재 이자율
+        current_borrow_rate: u64,     // 연간 차용 이자율 (basis points)
+        current_supply_rate: u64,     // 연간 공급 이자율 (basis points)
+        
+        // 시간 추적
+        last_update_timestamp: u64,
+        
+        // 풀 통계
+        total_suppliers: u64,
+        total_borrowers: u64,
+        
+        // 유동성 마이닝
+        supply_rewards_per_second: u64,
+        borrow_rewards_per_second: u64,
+        reward_token: Option<Object<Metadata>>
+    }
+    
+    /// 사용자 포지션
+    struct UserPosition has store, drop, copy {
+        user: address,
+        
+        // 공급 포지션 (자산별)
+        supplied_assets: SmartTable<Object<Metadata>, SupplyPosition>,
+        
+        // 차용 포지션 (자산별)
+        borrowed_assets: SmartTable<Object<Metadata>, BorrowPosition>,
+        
+        // 헬스 팩터
+        health_factor: u64,           // 10000 = 1.0 (안전)
+        total_collateral_value: u64,  // USD 기준
+        total_borrow_value: u64,      // USD 기준
+        
+        // 신용 점수
+        credit_score: u64,            // 0-1000
+        liquidation_history: vector<LiquidationRecord>,
+        
+        // 마지막 업데이트
+        last_updated: u64
+    }
+    
+    /// 공급 포지션
+    struct SupplyPosition has store, drop, copy {
+        asset: Object<Metadata>,
+        principal_amount: u64,        // 원금
+        accrued_interest: u64,        // 누적 이자
+        last_supply_index: u128,      // 마지막 공급 인덱스
+        
+        // 담보 사용 여부
+        used_as_collateral: bool,
+        
+        // 보상
+        unclaimed_rewards: u64,
+        last_reward_index: u128,
+        
+        created_at: u64,
+        last_updated: u64
+    }
+    
+    /// 차용 포지션
+    struct BorrowPosition has store, drop, copy {
+        asset: Object<Metadata>,
+        principal_amount: u64,        // 원금
+        accrued_interest: u64,        // 누적 이자
+        last_borrow_index: u128,      // 마지막 차용 인덱스
+        
+        // 차용 조건
+        interest_rate_mode: u8,       // 0: variable, 1: stable
+        stable_rate: Option<u64>,     // 고정 이자율 (해당하는 경우)
+        
+        // 보상 (차용 인센티브)
+        unclaimed_rewards: u64,
+        last_reward_index: u128,
+        
+        created_at: u64,
+        last_updated: u64
+    }
+    
+    /// 가격 오라클
+    struct PriceOracle has store, drop, copy {
+        asset: Object<Metadata>,
+        price_source: String,         // "chainlink", "pyth", "internal"
+        price_feed_address: Option<address>,
+        
+        // 가격 정보
+        current_price: u64,           // USD price with 8 decimals
+        last_update_time: u64,
+        price_deviation_threshold: u64, // basis points
+        
+        // 가격 검증
+        min_price: u64,
+        max_price: u64,
+        staleness_threshold: u64,     // seconds
+        
+        // 백업 오라클
+        backup_oracle: Option<address>
+    }
+    
+    /// 글로벌 리스크 매개변수
+    struct GlobalRiskParameters has store, drop, copy {
+        // 시스템 전체 제한
+        max_ltv: u64,                 // 최대 LTV (basis points)
+        liquidation_threshold: u64,   // 글로벌 청산 임계값
+        
+        // 리스크 가중 자산
+        total_risk_weighted_assets: u64,
+        max_concentration_ratio: u64, // 단일 자산 최대 비중
+        
+        // 스트레스 테스트 매개변수
+        stress_test_scenarios: vector<StressTestScenario>,
+        
+        // 비상 상황 대응
+        emergency_pause: bool,
+        guardian_multisig: Option<address>
+    }
+    
+    /// 스트레스 테스트 시나리오
+    struct StressTestScenario has store, drop, copy {
+        scenario_name: String,
+        price_shock_percentage: u64,  // 가격 하락 시나리오 (basis points)
+        assets_affected: vector<Object<Metadata>>,
+        expected_liquidation_ratio: u64
+    }
+    
+    /// 청산 기록
+    struct LiquidationRecord has store, drop, copy {
+        liquidated_asset: Object<Metadata>,
+        collateral_asset: Object<Metadata>,
+        liquidated_amount: u64,
+        collateral_seized: u64,
+        liquidator: address,
+        timestamp: u64,
+        health_factor_before: u64,
+        liquidation_bonus_received: u64
+    }
+    
+    /// 대출 이벤트
+    struct LendingEvent has drop, store {
+        event_type: String,
+        user: address,
+        asset: Object<Metadata>,
+        amount: u64,
+        additional_data: String,
+        timestamp: u64
+    }
+    
+    /// 대출 플랫폼 초기화
+    public fun initialize_lending_platform(
+        admin: &signer,
+        platform_name: String,
+        protocol_fee_rate: u64,
+        liquidation_incentive: u64
+    ) {
+        let admin_addr = signer::address_of(admin);
+        
+        // 입력 검증
+        assert!(protocol_fee_rate <= 1000, E_INVALID_FEE_RATE); // 최대 10%
+        assert!(liquidation_incentive <= 2000, E_INVALID_LIQUIDATION_INCENTIVE); // 최대 20%
+        
+        let platform = LendingPlatform {
+            admin: admin_addr,
+            platform_name,
+            supported_assets: smart_table::new(),
+            lending_pools: smart_table::new(),
+            user_positions: smart_table::new(),
+            price_oracles: smart_table::new(),
+            global_risk_params: GlobalRiskParameters {
+                max_ltv: 8000, // 80%
+                liquidation_threshold: 8500, // 85%
+                total_risk_weighted_assets: 0,
+                max_concentration_ratio: 3000, // 30%
+                stress_test_scenarios: vector::empty(),
+                emergency_pause: false,
+                guardian_multisig: option::none()
+            },
+            protocol_fee_rate,
+            liquidation_incentive,
+            close_factor: 5000, // 50%
+            total_supplied: 0,
+            total_borrowed: 0,
+            total_reserves: 0,
+            lending_events: account::new_event_handle<LendingEvent>(admin),
+            flash_loan_enabled: true,
+            flash_loan_fee: 9, // 0.09%
+            governance_token: option::none(),
+            created_at: timestamp::now_seconds(),
+            last_updated: timestamp::now_seconds()
+        };
+        
+        move_to(admin, platform);
+    }
+    
+    /// 새로운 자산 지원 추가
+    public fun add_supported_asset(
+        admin: &signer,
+        platform_addr: address,
+        asset: Object<Metadata>,
+        collateral_factor: u64,
+        liquidation_threshold: u64,
+        liquidation_bonus: u64,
+        supply_cap: Option<u64>,
+        borrow_cap: Option<u64>,
+        interest_rate_model: InterestRateModel,
+        initial_price: u64
+    ) acquires LendingPlatform {
+        let admin_addr = signer::address_of(admin);
+        let platform = borrow_global_mut<LendingPlatform>(platform_addr);
+        
+        // 권한 확인
+        assert!(admin_addr == platform.admin, E_NOT_AUTHORIZED);
+        
+        // 매개변수 검증
+        assert!(collateral_factor <= liquidation_threshold, E_INVALID_COLLATERAL_FACTOR);
+        assert!(liquidation_threshold <= 9500, E_INVALID_LIQUIDATION_THRESHOLD); // 최대 95%
+        assert!(liquidation_bonus <= 2000, E_INVALID_LIQUIDATION_BONUS); // 최대 20%
+        
+        let current_time = timestamp::now_seconds();
+        
+        // 자산 설정 생성
+        let asset_config = AssetConfig {
+            asset,
+            is_supported: true,
+            collateral_factor,
+            liquidation_threshold,
+            liquidation_bonus,
+            supply_cap,
+            borrow_cap,
+            interest_rate_model,
+            reserve_factor: 1000, // 10% 기본 준비금 비율
+            risk_weight: 10000, // 100% 기본 리스크 가중치
+            created_at: current_time,
+            updated_at: current_time
+        };
+        
+        // 대출 풀 생성
+        let lending_pool = LendingPool {
+            asset,
+            total_cash: 0,
+            total_borrows: 0,
+            total_reserves: 0,
+            borrow_index: 1000000000000000000, // 1.0 with 18 decimals
+            supply_index: 1000000000000000000, // 1.0 with 18 decimals
+            current_borrow_rate: interest_rate_model.base_rate,
+            current_supply_rate: 0,
+            last_update_timestamp: current_time,
+            total_suppliers: 0,
+            total_borrowers: 0,
+            supply_rewards_per_second: 0,
+            borrow_rewards_per_second: 0,
+            reward_token: option::none()
+        };
+        
+        // 가격 오라클 설정
+        let price_oracle = PriceOracle {
+            asset,
+            price_source: string::utf8(b"internal"),
+            price_feed_address: option::none(),
+            current_price: initial_price,
+            last_update_time: current_time,
+            price_deviation_threshold: 500, // 5%
+            min_price: initial_price / 10,   // 최소 10% of initial
+            max_price: initial_price * 10,   // 최대 10x of initial
+            staleness_threshold: 3600, // 1 hour
+            backup_oracle: option::none()
+        };
+        
+        // 플랫폼에 추가
+        smart_table::add(&mut platform.supported_assets, asset, asset_config);
+        smart_table::add(&mut platform.lending_pools, asset, lending_pool);
+        smart_table::add(&mut platform.price_oracles, asset, price_oracle);
+        
+        platform.last_updated = current_time;
+    }
+    
+    /// 자산 공급 (예치)
+    public fun supply_asset(
+        supplier: &signer,
+        platform_addr: address,
+        asset: Object<Metadata>,
+        amount: u64
+    ) acquires LendingPlatform {
+        let supplier_addr = signer::address_of(supplier);
+        let platform = borrow_global_mut<LendingPlatform>(platform_addr);
+        
+        // 비상 상황 확인
+        assert!(!platform.global_risk_params.emergency_pause, E_EMERGENCY_PAUSE);
+        
+        // 지원 자산 확인
+        assert!(smart_table::contains(&platform.supported_assets, asset), E_ASSET_NOT_SUPPORTED);
+        let asset_config = smart_table::borrow(&platform.supported_assets, asset);
+        assert!(asset_config.is_supported, E_ASSET_NOT_SUPPORTED);
+        
+        // 공급 한도 확인
+        if (option::is_some(&asset_config.supply_cap)) {
+            let supply_cap = *option::borrow(&asset_config.supply_cap);
+            let pool = smart_table::borrow(&platform.lending_pools, asset);
+            assert!(pool.total_cash + amount <= supply_cap, E_SUPPLY_CAP_EXCEEDED);
+        };
+        
+        // 이자 누적
+        accrue_interest(platform, asset);
+        
+        // 자산 전송
+        let fa = primary_fungible_store::withdraw(supplier, asset, amount);
+        // 플랫폼으로 이전 (실제로는 플랫폼 주소로)
+        primary_fungible_store::deposit(platform_addr, fa);
+        
+        // 풀 상태 업데이트
+        let pool = smart_table::borrow_mut(&mut platform.lending_pools, asset);
+        pool.total_cash = pool.total_cash + amount;
+        
+        // 사용자 포지션 업데이트
+        update_user_supply_position(platform, supplier_addr, asset, amount, true);
+        
+        // 통계 업데이트
+        platform.total_supplied = platform.total_supplied + amount;
+        
+        // 이벤트 발생
+        event::emit_event(&mut platform.lending_events, LendingEvent {
+            event_type: string::utf8(b"supply"),
+            user: supplier_addr,
+            asset,
+            amount,
+            additional_data: string::utf8(b""),
+            timestamp: timestamp::now_seconds()
+        });
+    }
+    
+    /// 자산 차용
+    public fun borrow_asset(
+        borrower: &signer,
+        platform_addr: address,
+        asset: Object<Metadata>,
+        amount: u64,
+        interest_rate_mode: u8
+    ) acquires LendingPlatform {
+        let borrower_addr = signer::address_of(borrower);
+        let platform = borrow_global_mut<LendingPlatform>(platform_addr);
+        
+        // 비상 상황 확인
+        assert!(!platform.global_risk_params.emergency_pause, E_EMERGENCY_PAUSE);
+        
+        // 지원 자산 확인
+        assert!(smart_table::contains(&platform.supported_assets, asset), E_ASSET_NOT_SUPPORTED);
+        let asset_config = smart_table::borrow(&platform.supported_assets, asset);
+        
+        // 차용 한도 확인
+        if (option::is_some(&asset_config.borrow_cap)) {
+            let borrow_cap = *option::borrow(&asset_config.borrow_cap);
+            let pool = smart_table::borrow(&platform.lending_pools, asset);
+            assert!(pool.total_borrows + amount <= borrow_cap, E_BORROW_CAP_EXCEEDED);
+        };
+        
+        // 이자 누적
+        accrue_interest(platform, asset);
+        
+        // 유동성 확인
+        let pool = smart_table::borrow(&platform.lending_pools, asset);
+        assert!(pool.total_cash >= amount, E_INSUFFICIENT_LIQUIDITY);
+        
+        // 사용자 포지션 및 헬스 팩터 확인
+        let user_position = get_or_create_user_position(platform, borrower_addr);
+        let health_factor_after = calculate_health_factor_after_borrow(
+            platform, 
+            user_position, 
+            asset, 
+            amount
+        );
+        assert!(health_factor_after >= 10000, E_INSUFFICIENT_COLLATERAL); // >= 1.0
+        
+        // 자산 전송
+        let fa = primary_fungible_store::withdraw(&account::create_signer(platform_addr), asset, amount);
+        primary_fungible_store::deposit(borrower_addr, fa);
+        
+        // 풀 상태 업데이트
+        let pool = smart_table::borrow_mut(&mut platform.lending_pools, asset);
+        pool.total_cash = pool.total_cash - amount;
+        pool.total_borrows = pool.total_borrows + amount;
+        
+        // 사용자 포지션 업데이트
+        update_user_borrow_position(platform, borrower_addr, asset, amount, interest_rate_mode, true);
+        
+        // 통계 업데이트
+        platform.total_borrowed = platform.total_borrowed + amount;
+        
+        // 이벤트 발생
+        event::emit_event(&mut platform.lending_events, LendingEvent {
+            event_type: string::utf8(b"borrow"),
+            user: borrower_addr,
+            asset,
+            amount,
+            additional_data: string::utf8(b""),
+            timestamp: timestamp::now_seconds()
+        });
+    }
+    
+    /// 차용 상환
+    public fun repay_borrow(
+        borrower: &signer,
+        platform_addr: address,
+        asset: Object<Metadata>,
+        amount: u64
+    ) acquires LendingPlatform {
+        let borrower_addr = signer::address_of(borrower);
+        let platform = borrow_global_mut<LendingPlatform>(platform_addr);
+        
+        // 이자 누적
+        accrue_interest(platform, asset);
+        
+        // 사용자 포지션 확인
+        assert!(smart_table::contains(&platform.user_positions, borrower_addr), E_NO_BORROW_POSITION);
+        let user_position = smart_table::borrow(&platform.user_positions, borrower_addr);
+        assert!(smart_table::contains(&user_position.borrowed_assets, asset), E_NO_BORROW_POSITION);
+        
+        let borrow_position = smart_table::borrow(&user_position.borrowed_assets, asset);
+        let total_debt = borrow_position.principal_amount + borrow_position.accrued_interest;
+        
+        // 실제 상환 금액 계산 (전체 상환 시 초과 금액 방지)
+        let actual_repay_amount = math64::min(amount, total_debt);
+        
+        // 자산 전송
+        let fa = primary_fungible_store::withdraw(borrower, asset, actual_repay_amount);
+        primary_fungible_store::deposit(platform_addr, fa);
+        
+        // 풀 상태 업데이트
+        let pool = smart_table::borrow_mut(&mut platform.lending_pools, asset);
+        pool.total_cash = pool.total_cash + actual_repay_amount;
+        pool.total_borrows = pool.total_borrows - actual_repay_amount;
+        
+        // 사용자 포지션 업데이트
+        update_user_borrow_position(platform, borrower_addr, asset, actual_repay_amount, 0, false);
+        
+        // 통계 업데이트
+        platform.total_borrowed = platform.total_borrowed - actual_repay_amount;
+        
+        // 잔액 반환
+        if (amount > actual_repay_amount) {
+            let refund_amount = amount - actual_repay_amount;
+            let refund_fa = primary_fungible_store::withdraw(&account::create_signer(platform_addr), asset, refund_amount);
+            primary_fungible_store::deposit(borrower_addr, refund_fa);
+        };
+        
+        // 이벤트 발생
+        event::emit_event(&mut platform.lending_events, LendingEvent {
+            event_type: string::utf8(b"repay"),
+            user: borrower_addr,
+            asset,
+            amount: actual_repay_amount,
+            additional_data: string::utf8(b""),
+            timestamp: timestamp::now_seconds()
+        });
+    }
+    
+    /// 청산 실행
+    public fun liquidate_borrow(
+        liquidator: &signer,
+        platform_addr: address,
+        borrower: address,
+        debt_asset: Object<Metadata>,
+        collateral_asset: Object<Metadata>,
+        repay_amount: u64
+    ) acquires LendingPlatform {
+        let liquidator_addr = signer::address_of(liquidator);
+        let platform = borrow_global_mut<LendingPlatform>(platform_addr);
+        
+        // 이자 누적
+        accrue_interest(platform, debt_asset);
+        accrue_interest(platform, collateral_asset);
+        
+        // 사용자 포지션 확인
+        assert!(smart_table::contains(&platform.user_positions, borrower), E_NO_BORROW_POSITION);
+        let user_position = smart_table::borrow_mut(&mut platform.user_positions, borrower);
+        
+        // 헬스 팩터 확인 (청산 가능 여부)
+        let health_factor = calculate_current_health_factor(platform, user_position);
+        assert!(health_factor < 10000, E_POSITION_HEALTHY); // < 1.0일 때만 청산 가능
+        
+        // 청산 가능 금액 확인
+        let debt_position = smart_table::borrow(&user_position.borrowed_assets, debt_asset);
+        let total_debt = debt_position.principal_amount + debt_position.accrued_interest;
+        let max_liquidation_amount = (total_debt * platform.close_factor) / 10000;
+        
+        assert!(repay_amount <= max_liquidation_amount, E_LIQUIDATION_AMOUNT_TOO_HIGH);
+        
+        // 담보 자산 확인
+        assert!(smart_table::contains(&user_position.supplied_assets, collateral_asset), E_NO_COLLATERAL);
+        let collateral_position = smart_table::borrow(&user_position.supplied_assets, collateral_asset);
+        assert!(collateral_position.used_as_collateral, E_COLLATERAL_NOT_ENABLED);
+        
+        // 청산 보너스 계산
+        let debt_asset_config = smart_table::borrow(&platform.supported_assets, debt_asset);
+        let collateral_asset_config = smart_table::borrow(&platform.supported_assets, collateral_asset);
+        
+        let debt_price = get_asset_price(&platform.price_oracles, debt_asset);
+        let collateral_price = get_asset_price(&platform.price_oracles, collateral_asset);
+        
+        let liquidation_bonus = collateral_asset_config.liquidation_bonus;
+        let collateral_amount = calculate_collateral_amount(
+            repay_amount,
+            debt_price,
+            collateral_price,
+            liquidation_bonus
+        );
+        
+        // 담보 부족 확인
+        let total_collateral = collateral_position.principal_amount + collateral_position.accrued_interest;
+        assert!(total_collateral >= collateral_amount, E_INSUFFICIENT_COLLATERAL_TO_SEIZE);
+        
+        // 청산자로부터 부채 자산 받기
+        let repay_fa = primary_fungible_store::withdraw(liquidator, debt_asset, repay_amount);
+        primary_fungible_store::deposit(platform_addr, repay_fa);
+        
+        // 청산자에게 담보 자산 지급
+        let collateral_fa = primary_fungible_store::withdraw(&account::create_signer(platform_addr), collateral_asset, collateral_amount);
+        primary_fungible_store::deposit(liquidator_addr, collateral_fa);
+        
+        // 풀 상태 업데이트
+        let debt_pool = smart_table::borrow_mut(&mut platform.lending_pools, debt_asset);
+        debt_pool.total_cash = debt_pool.total_cash + repay_amount;
+        debt_pool.total_borrows = debt_pool.total_borrows - repay_amount;
+        
+        let collateral_pool = smart_table::borrow_mut(&mut platform.lending_pools, collateral_asset);
+        collateral_pool.total_cash = collateral_pool.total_cash - collateral_amount;
+        
+        // 사용자 포지션 업데이트
+        update_user_borrow_position(platform, borrower, debt_asset, repay_amount, 0, false);
+        update_user_supply_position(platform, borrower, collateral_asset, collateral_amount, false);
+        
+        // 청산 기록 저장
+        let liquidation_record = LiquidationRecord {
+            liquidated_asset: debt_asset,
+            collateral_asset,
+            liquidated_amount: repay_amount,
+            collateral_seized: collateral_amount,
+            liquidator: liquidator_addr,
+            timestamp: timestamp::now_seconds(),
+            health_factor_before: health_factor,
+            liquidation_bonus_received: (collateral_amount * liquidation_bonus) / 10000
+        };
+        
+        vector::push_back(&mut user_position.liquidation_history, liquidation_record);
+        
+        // 신용 점수 하락
+        if (user_position.credit_score > 100) {
+            user_position.credit_score = user_position.credit_score - 100;
+        };
+        
+        // 이벤트 발생
+        event::emit_event(&mut platform.lending_events, LendingEvent {
+            event_type: string::utf8(b"liquidation"),
+            user: borrower,
+            asset: debt_asset,
+            amount: repay_amount,
+            additional_data: object::object_address(&collateral_asset).to_string(),
+            timestamp: timestamp::now_seconds()
+        });
+    }
+    
+    /// 플래시 론
+    public fun flash_loan(
+        borrower: &signer,
+        platform_addr: address,
+        asset: Object<Metadata>,
+        amount: u64,
+        callback_target: address,
+        callback_data: vector<u8>
+    ) acquires LendingPlatform {
+        let borrower_addr = signer::address_of(borrower);
+        let platform = borrow_global_mut<LendingPlatform>(platform_addr);
+        
+        // 플래시 론 활성화 확인
+        assert!(platform.flash_loan_enabled, E_FLASH_LOAN_DISABLED);
+        
+        // 유동성 확인
+        let pool = smart_table::borrow(&platform.lending_pools, asset);
+        let initial_balance = pool.total_cash;
+        assert!(initial_balance >= amount, E_INSUFFICIENT_LIQUIDITY);
+        
+        // 수수료 계산
+        let flash_loan_fee = (amount * platform.flash_loan_fee) / 10000;
+        let total_owed = amount + flash_loan_fee;
+        
+        // 자산 대출
+        let fa = primary_fungible_store::withdraw(&account::create_signer(platform_addr), asset, amount);
+        primary_fungible_store::deposit(borrower_addr, fa);
+        
+        // 콜백 실행 (실제로는 더 복잡한 콜백 메커니즘 필요)
+        execute_flash_loan_callback(borrower_addr, callback_target, callback_data, asset, amount, total_owed);
+        
+        // 상환 확인
+        let repay_fa = primary_fungible_store::withdraw(borrower, asset, total_owed);
+        primary_fungible_store::deposit(platform_addr, repay_fa);
+        
+        // 풀 상태 업데이트
+        let pool = smart_table::borrow_mut(&mut platform.lending_pools, asset);
+        pool.total_cash = initial_balance + flash_loan_fee;
+        pool.total_reserves = pool.total_reserves + flash_loan_fee;
+        
+        // 통계 업데이트
+        platform.total_reserves = platform.total_reserves + flash_loan_fee;
+        
+        // 이벤트 발생
+        event::emit_event(&mut platform.lending_events, LendingEvent {
+            event_type: string::utf8(b"flash_loan"),
+            user: borrower_addr,
+            asset,
+            amount,
+            additional_data: flash_loan_fee.to_string(),
+            timestamp: timestamp::now_seconds()
+        });
+    }
+    
+    /// 이자 누적 계산
+    fun accrue_interest(platform: &mut LendingPlatform, asset: Object<Metadata>) {
+        let pool = smart_table::borrow_mut(&mut platform.lending_pools, asset);
+        let current_time = timestamp::now_seconds();
+        let time_elapsed = current_time - pool.last_update_timestamp;
+        
+        if (time_elapsed > 0 && pool.total_borrows > 0) {
+            // 현재 이자율 계산
+            let asset_config = smart_table::borrow(&platform.supported_assets, asset);
+            let utilization_rate = calculate_utilization_rate(pool);
+            let borrow_rate = calculate_borrow_rate(&asset_config.interest_rate_model, utilization_rate);
+            let supply_rate = calculate_supply_rate(borrow_rate, utilization_rate, asset_config.reserve_factor);
+            
+            // 이자 누적
+            let borrow_interest = (pool.total_borrows * borrow_rate * time_elapsed) / (365 * 24 * 3600 * 10000);
+            let supply_interest = (pool.total_cash * supply_rate * time_elapsed) / (365 * 24 * 3600 * 10000);
+            
+            // 인덱스 업데이트
+            pool.borrow_index = pool.borrow_index + (pool.borrow_index * borrow_rate * time_elapsed) / (365 * 24 * 3600 * 10000);
+            pool.supply_index = pool.supply_index + (pool.supply_index * supply_rate * time_elapsed) / (365 * 24 * 3600 * 10000);
+            
+            // 풀 상태 업데이트
+            pool.total_borrows = pool.total_borrows + borrow_interest;
+            pool.current_borrow_rate = borrow_rate;
+            pool.current_supply_rate = supply_rate;
+            
+            // 준비금 증가
+            let reserve_increase = (borrow_interest * asset_config.reserve_factor) / 10000;
+            pool.total_reserves = pool.total_reserves + reserve_increase;
+            
+            pool.last_update_timestamp = current_time;
+        }
+    }
+    
+    /// 활용률 계산
+    fun calculate_utilization_rate(pool: &LendingPool): u64 {
+        let total_supply = pool.total_cash + pool.total_borrows;
+        if (total_supply == 0) {
+            0
+        } else {
+            (pool.total_borrows * 10000) / total_supply
+        }
+    }
+    
+    /// 차용 이자율 계산
+    fun calculate_borrow_rate(model: &InterestRateModel, utilization_rate: u64): u64 {
+        match (model.model_type) {
+            0 => {  // Linear model
+                model.base_rate + (model.multiplier * utilization_rate) / 10000
+            },
+            1 => {  // Kinked model
+                if (option::is_some(&model.kink)) {
+                    let kink = *option::borrow(&model.kink);
+                    if (utilization_rate <= kink) {
+                        model.base_rate + (model.multiplier * utilization_rate) / 10000
+                    } else {
+                        let normal_rate = model.base_rate + (model.multiplier * kink) / 10000;
+                        let excess_utilization = utilization_rate - kink;
+                        let jump_multiplier = *option::borrow(&model.jump_multiplier);
+                        normal_rate + (jump_multiplier * excess_utilization) / 10000
+                    }
+                } else {
+                    model.base_rate + (model.multiplier * utilization_rate) / 10000
+                }
+            },
+            _ => model.base_rate  // Default to base rate
+        }
+    }
+    
+    /// 공급 이자율 계산
+    fun calculate_supply_rate(borrow_rate: u64, utilization_rate: u64, reserve_factor: u64): u64 {
+        let rate_to_suppliers = borrow_rate - (borrow_rate * reserve_factor) / 10000;
+        (rate_to_suppliers * utilization_rate) / 10000
+    }
+    
+    /// 헬스 팩터 계산
+    fun calculate_current_health_factor(
+        platform: &LendingPlatform,
+        user_position: &UserPosition
+    ): u64 {
+        if (user_position.total_borrow_value == 0) {
+            return 100000 // 무한대를 나타내는 큰 값
+        };
+        
+        let weighted_collateral_value = calculate_weighted_collateral_value(platform, user_position);
+        (weighted_collateral_value * 10000) / user_position.total_borrow_value
+    }
+    
+    /// 가중 담보 가치 계산
+    fun calculate_weighted_collateral_value(
+        platform: &LendingPlatform,
+        user_position: &UserPosition
+    ): u64 {
+        let mut total_weighted_value = 0;
+        
+        smart_table::for_each_ref(&user_position.supplied_assets, |asset, supply_position| {
+            if (supply_position.used_as_collateral) {
+                let asset_config = smart_table::borrow(&platform.supported_assets, *asset);
+                let asset_price = get_asset_price(&platform.price_oracles, *asset);
+                let position_value = (supply_position.principal_amount + supply_position.accrued_interest) * asset_price;
+                let weighted_value = (position_value * asset_config.liquidation_threshold) / 10000;
+                total_weighted_value = total_weighted_value + weighted_value;
+            }
+        });
+        
+        total_weighted_value
+    }
+    
+    // 헬퍼 함수들 계속...
+    
+    // 조회 함수들
+    
+    /// 사용자 포지션 조회
+    public fun get_user_position(
+        platform_addr: address,
+        user_addr: address
+    ): Option<UserPosition> acquires LendingPlatform {
+        let platform = borrow_global<LendingPlatform>(platform_addr);
+        
+        if (smart_table::contains(&platform.user_positions, user_addr)) {
+            option::some(*smart_table::borrow(&platform.user_positions, user_addr))
+        } else {
+            option::none()
+        }
+    }
+    
+    /// 대출 풀 정보 조회
+    public fun get_lending_pool_info(
+        platform_addr: address,
+        asset: Object<Metadata>
+    ): Option<LendingPoolInfo> acquires LendingPlatform {
+        let platform = borrow_global<LendingPlatform>(platform_addr);
+        
+        if (smart_table::contains(&platform.lending_pools, asset)) {
+            let pool = smart_table::borrow(&platform.lending_pools, asset);
+            let asset_config = smart_table::borrow(&platform.supported_assets, asset);
+            
+            option::some(LendingPoolInfo {
+                asset,
+                total_cash: pool.total_cash,
+                total_borrows: pool.total_borrows,
+                total_reserves: pool.total_reserves,
+                current_borrow_rate: pool.current_borrow_rate,
+                current_supply_rate: pool.current_supply_rate,
+                utilization_rate: calculate_utilization_rate(pool),
+                collateral_factor: asset_config.collateral_factor,
+                liquidation_threshold: asset_config.liquidation_threshold,
+                liquidation_bonus: asset_config.liquidation_bonus
+            })
+        } else {
+            option::none()
+        }
+    }
+    
+    struct LendingPoolInfo has drop {
+        asset: Object<Metadata>,
+        total_cash: u64,
+        total_borrows: u64,
+        total_reserves: u64,
+        current_borrow_rate: u64,
+        current_supply_rate: u64,
+        utilization_rate: u64,
+        collateral_factor: u64,
+        liquidation_threshold: u64,
+        liquidation_bonus: u64
+    }
+    
+    // 더 많은 헬퍼 함수들과 에러 코드들...
+    
+    // 에러 코드
+    const E_NOT_AUTHORIZED: u64 = 1;
+    const E_INVALID_FEE_RATE: u64 = 2;
+    const E_INVALID_LIQUIDATION_INCENTIVE: u64 = 3;
+    const E_ASSET_NOT_SUPPORTED: u64 = 4;
+    const E_SUPPLY_CAP_EXCEEDED: u64 = 5;
+    const E_BORROW_CAP_EXCEEDED: u64 = 6;
+    const E_INSUFFICIENT_LIQUIDITY: u64 = 7;
+    const E_INSUFFICIENT_COLLATERAL: u64 = 8;
+    const E_NO_BORROW_POSITION: u64 = 9;
+    const E_POSITION_HEALTHY: u64 = 10;
+    const E_LIQUIDATION_AMOUNT_TOO_HIGH: u64 = 11;
+    const E_NO_COLLATERAL: u64 = 12;
+    const E_COLLATERAL_NOT_ENABLED: u64 = 13;
+    const E_INSUFFICIENT_COLLATERAL_TO_SEIZE: u64 = 14;
+    const E_FLASH_LOAN_DISABLED: u64 = 15;
+    const E_EMERGENCY_PAUSE: u64 = 16;
+    const E_INVALID_COLLATERAL_FACTOR: u64 = 17;
+    const E_INVALID_LIQUIDATION_THRESHOLD: u64 = 18;
+    const E_INVALID_LIQUIDATION_BONUS: u64 = 19;
+}
+```
+
+## 🧮 동적 이자율 모델 구현
+
+> *Adaptive interest rate algorithms - Created by bookiroad*
+
+### 고급 이자율 계산 시스템
+```move
+module interest_rate_models::advanced_models {
+    use std::math64;
+    use aptos_framework::timestamp;
+    
+    /// 적응형 이자율 모델
+    struct AdaptiveInterestRateModel has store, drop, copy {
+        // 기본 매개변수
+        base_rate: u64,
+        slope1: u64,
+        slope2: u64,
+        optimal_utilization: u64,
+        
+        // 적응형 매개변수
+        adaptive_enabled: bool,
+        target_utilization: u64,     // 목표 활용률
+        adjustment_factor: u64,      // 조정 계수 (basis points)
+        max_adjustment: u64,         // 최대 조정 폭
+        
+        // 시간 가중 평균
+        utilization_history: vector<UtilizationPoint>,
+        history_window: u64,         // 히스토리 윈도우 (초)
+        
+        // 변동성 조정
+        volatility_multiplier: u64,
+        stress_multiplier: u64,      // 스트레스 상황 시 배수
+        
+        last_updated: u64
+    }
+    
+    struct UtilizationPoint has store, drop, copy {
+        utilization_rate: u64,
+        timestamp: u64,
+        market_stress_indicator: u64  // 0-10000 (0% - 100%)
+    }
+    
+    /// 동적 이자율 계산
+    public fun calculate_dynamic_rates(
+        model: &mut AdaptiveInterestRateModel,
+        current_utilization: u64,
+        total_borrows: u64,
+        total_liquidity: u64
+    ): (u64, u64) {  // (borrow_rate, supply_rate)
+        let current_time = timestamp::now_seconds();
+        
+        // 히스토리 업데이트
+        update_utilization_history(model, current_utilization, current_time);
+        
+        // 기본 이자율 계산
+        let base_borrow_rate = calculate_base_rate(model, current_utilization);
+        
+        // 적응형 조정 적용
+        let adjusted_borrow_rate = if (model.adaptive_enabled) {
+            apply_adaptive_adjustment(model, base_borrow_rate, current_time)
+        } else {
+            base_borrow_rate
+        };
+        
+        // 변동성 조정
+        let final_borrow_rate = apply_volatility_adjustment(model, adjusted_borrow_rate);
+        
+        // 공급 이자율 계산 (대출 이자율에서 준비금 비율 차감)
+        let supply_rate = calculate_supply_rate_from_borrow(
+            final_borrow_rate,
+            current_utilization,
+            1000  // 10% 준비금 비율
+        );
+        
+        model.last_updated = current_time;
+        
+        (final_borrow_rate, supply_rate)
+    }
+    
+    /// 기본 이자율 계산 (Kinked 모델)
+    fun calculate_base_rate(model: &AdaptiveInterestRateModel, utilization: u64): u64 {
+        if (utilization <= model.optimal_utilization) {
+            // 최적 활용률 이하: 선형 증가
+            model.base_rate + (utilization * model.slope1) / model.optimal_utilization
+        } else {
+            // 최적 활용률 초과: 급격한 증가
+            let base_rate_at_optimal = model.base_rate + model.slope1;
+            let excess_utilization = utilization - model.optimal_utilization;
+            let max_excess = 10000 - model.optimal_utilization;
+            
+            base_rate_at_optimal + (excess_utilization * model.slope2) / max_excess
+        }
+    }
+    
+    /// 적응형 조정 적용
+    fun apply_adaptive_adjustment(
+        model: &AdaptiveInterestRateModel,
+        base_rate: u64,
+        current_time: u64
+    ): u64 {
+        // 시간 가중 평균 활용률 계산
+        let avg_utilization = calculate_weighted_average_utilization(model, current_time);
+        
+        // 목표 활용률과의 편차 계산
+        let utilization_deviation = if (avg_utilization > model.target_utilization) {
+            avg_utilization - model.target_utilization
+        } else {
+            model.target_utilization - avg_utilization
+        };
+        
+        // 조정 폭 계산
+        let adjustment = math64::min(
+            (utilization_deviation * model.adjustment_factor) / 10000,
+            model.max_adjustment
+        );
+        
+        // 목표보다 높으면 이자율 상승, 낮으면 하락
+        if (avg_utilization > model.target_utilization) {
+            base_rate + adjustment
+        } else {
+            if (base_rate > adjustment) {
+                base_rate - adjustment
+            } else {
+                base_rate / 2  // 최소 절반까지만 하락
+            }
+        }
+    }
+    
+    /// 변동성 조정 적용
+    fun apply_volatility_adjustment(
+        model: &AdaptiveInterestRateModel,
+        base_rate: u64
+    ): u64 {
+        // 최근 활용률 변동성 계산
+        let volatility = calculate_utilization_volatility(model);
+        
+        // 시장 스트레스 지표
+        let stress_level = calculate_market_stress(model);
+        
+        // 변동성 기반 조정
+        let volatility_adjustment = (base_rate * volatility * model.volatility_multiplier) / (10000 * 10000);
+        
+        // 스트레스 기반 조정
+        let stress_adjustment = if (stress_level > 5000) {  // 50% 이상
+            (base_rate * model.stress_multiplier) / 10000
+        } else {
+            0
+        };
+        
+        base_rate + volatility_adjustment + stress_adjustment
+    }
+    
+    /// 시간 가중 평균 활용률 계산
+    fun calculate_weighted_average_utilization(
+        model: &AdaptiveInterestRateModel,
+        current_time: u64
+    ): u64 {
+        let history = &model.utilization_history;
+        let window_start = current_time - model.history_window;
+        
+        let mut weighted_sum = 0;
+        let mut total_weight = 0;
+        let i = 0;
+        
+        while (i < vector::length(history)) {
+            let point = vector::borrow(history, i);
+            if (point.timestamp >= window_start) {
+                let weight = current_time - point.timestamp + 1;  // 최신일수록 높은 가중치
+                weighted_sum = weighted_sum + (point.utilization_rate * weight);
+                total_weight = total_weight + weight;
+            };
+            i = i + 1;
+        };
+        
+        if (total_weight > 0) {
+            weighted_sum / total_weight
+        } else {
+            0
+        }
+    }
+    
+    /// 활용률 변동성 계산
+    fun calculate_utilization_volatility(model: &AdaptiveInterestRateModel): u64 {
+        let history = &model.utilization_history;
+        let len = vector::length(history);
+        
+        if (len < 2) {
+            return 0
+        };
+        
+        // 표준편차 계산을 위한 평균
+        let mut sum = 0;
+        let i = 0;
+        while (i < len) {
+            let point = vector::borrow(history, i);
+            sum = sum + point.utilization_rate;
+            i = i + 1;
+        };
+        let mean = sum / len;
+        
+        // 분산 계산
+        let mut variance_sum = 0;
+        let i = 0;
+        while (i < len) {
+            let point = vector::borrow(history, i);
+            let diff = if (point.utilization_rate > mean) {
+                point.utilization_rate - mean
+            } else {
+                mean - point.utilization_rate
+            };
+            variance_sum = variance_sum + (diff * diff);
+            i = i + 1;
+        };
+        
+        let variance = variance_sum / len;
+        math64::sqrt(variance)  // 표준편차 = 변동성
+    }
+    
+    /// 시장 스트레스 지표 계산
+    fun calculate_market_stress(model: &AdaptiveInterestRateModel): u64 {
+        let history = &model.utilization_history;
+        let len = vector::length(history);
+        
+        if (len == 0) {
+            return 0
+        };
+        
+        let mut stress_sum = 0;
+        let i = 0;
+        while (i < len) {
+            let point = vector::borrow(history, i);
+            stress_sum = stress_sum + point.market_stress_indicator;
+            i = i + 1;
+        };
+        
+        stress_sum / len  // 평균 스트레스 레벨
+    }
+    
+    /// 활용률 히스토리 업데이트
+    fun update_utilization_history(
+        model: &mut AdaptiveInterestRateModel,
+        current_utilization: u64,
+        current_time: u64
+    ) {
+        // 시장 스트레스 지표 계산 (간단한 예시)
+        let stress_indicator = if (current_utilization > 9000) {  // 90% 이상
+            8000  // 높은 스트레스
+        } else if (current_utilization > 7000) {  // 70% 이상
+            5000  // 중간 스트레스
+        } else {
+            2000  // 낮은 스트레스
+        };
+        
+        let new_point = UtilizationPoint {
+            utilization_rate: current_utilization,
+            timestamp: current_time,
+            market_stress_indicator: stress_indicator
+        };
+        
+        vector::push_back(&mut model.utilization_history, new_point);
+        
+        // 오래된 데이터 정리 (윈도우 밖의 데이터 제거)
+        let window_start = current_time - model.history_window;
+        let mut i = 0;
+        while (i < vector::length(&model.utilization_history)) {
+            let point = vector::borrow(&model.utilization_history, i);
+            if (point.timestamp < window_start) {
+                vector::remove(&mut model.utilization_history, i);
+            } else {
+                i = i + 1;
+            }
+        }
+    }
+    
+    /// 공급 이자율 계산
+    fun calculate_supply_rate_from_borrow(
+        borrow_rate: u64,
+        utilization_rate: u64,
+        reserve_factor: u64
+    ): u64 {
+        let net_rate = borrow_rate - (borrow_rate * reserve_factor) / 10000;
+        (net_rate * utilization_rate) / 10000
+    }
+}
+```
+
+## 🔗 다음 단계
+
+Lending & Borrowing 시스템을 마스터했다면:
+
+**[DEX & AMM 구현 →](/dapp-development/defi-development/dex-amm-implementation)**
+
+## 📚 참고 자료
+
+- [Movement 개발자 포털](https://developer.movementnetwork.xyz/)
+- [DeFi 대출 프로토콜 가이드](https://docs.movementnetwork.xyz/defi-lending)
+- [이자율 모델 설계](https://docs.movementnetwork.xyz/interest-rate-models)
+
+---
+
+*Movement Network에서 안전하고 효율적인 대출 프로토콜을 구축하세요! 🏦💰*
