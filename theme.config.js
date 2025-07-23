@@ -4,9 +4,9 @@ export default {
   titleSuffix: " – Move Book",
   logo: (
     <>
-      <span className="mr-3 font-extrabold hidden md:inline">Move Book</span>
+      <span className="mr-3 font-extrabold hidden md:inline">Movement Move Book</span>
       <span className="text-gray-600 font-normal hidden md:inline">
-        Movement Network 개발자 가이드
+        무브먼트에서 시작하는 Move 개발 가이드
       </span>
     </>
   ),
@@ -19,7 +19,7 @@ export default {
       <meta name="description" content="Movement Network의 한국어 개발자 문서 - Move 언어부터 dApp 개발까지" />
       <meta name="og:description" content="Movement Network의 한국어 개발자 문서 - Move 언어부터 dApp 개발까지" />
       <meta name="twitter:card" content="summary_large_image" />
-      <meta name="og:title" content="Move Book - Movement Network 개발자 가이드" />
+      <meta name="og:title" content="Movement Move Book - 무브먼트에서 시작하는 Move 개발 가이드" />
       <meta name="apple-mobile-web-app-title" content="Move Book" />
       <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
       <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
